@@ -130,6 +130,8 @@ class UserAuth:
 
 class WatchHistory:
     def __init__(self, user_dir):
+        # Ensure parent directory exists
+        user_dir.mkdir(parents=True, exist_ok=True)
         self.file = user_dir / "history.json"
         self._load()
     
@@ -178,6 +180,8 @@ class WatchHistory:
 
 class Playlists:
     def __init__(self, user_dir):
+        # Ensure parent directory exists
+        user_dir.mkdir(parents=True, exist_ok=True)
         self.file = user_dir / "playlists.json"
         self._load()
     
