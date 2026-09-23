@@ -17,6 +17,13 @@ from datetime import datetime
 import webbrowser
 import io
 
+try:
+    import mpv
+    HAS_MPV = True
+except ImportError:
+    HAS_MPV = False
+    print("Warning: python-mpv not available, video playback will not work")
+
 # Try to import dependencies
 try:
     import requests
@@ -162,6 +169,25 @@ class YouTubeStreamApp:
                               bg='#181818', fg='#888888')
         self.status.pack(side='bottom', anchor='w', padx=24, pady=(24, 0))
         
+        # Embedded player frame (hidden by default)
+        self.player_frame = tk.Frame(self.main, bg='#1a1a1a', relief='groove', bd=2)
+        self.player_frame.pack_forget()
+        
+        self.player_label = tk.Label(self.player_frame, text="", font=('Segoe UI', 10),
+                                     bg='#1a1a1a', fg='#cccccc')
+        self.player_label.pack(anchor='w', padx=10, pady=(5, 0))
+        
+        self.player_close_btn = tk.Button(self.player_frame, text="✕ Close",
+                                          command=self.close_player,
+                                          bg='#f44336', fg='white',
+                                          font=('Segoe UI', 10, 'bold'),
+                                          relief='flat', width=3)
+        self.player_close_btn.pack(anchor='e', padx=10, pady=(5, 10))
+        
+        # MPV player widget placeholder
+        self.mpv_container = tk.Frame(self.player_frame, bg='black', height=360)
+        self.mpv_container.pack(fill='both', expand=True)
+        
         # Menu
         self.create_menu()
     
@@ -275,8 +301,72 @@ class YouTubeStreamApp:
             self.grid.grid_columnconfigure(i, weight=1)
     
     def play_video(self, video):
-        self.status.config(text=f"Playing: {video.get('title', '')[:40]}...")
-        webbrowser.open(f'{SERVER_URL}/proxy/{video.get("id")}')
+        video_id = video.get('id')
+        title = video.get('title', 'Unknown')
+        url = f'https://www.youtube.com/watch?v={video_id}'
+        
+        self.status.config(text=f"Playing: {title[:40]}...")
+        
+        # Hide grid and show player
+        self.grid.pack_forget()
+        self.player_frame.pack(fill='both', expand=True, padx=24, pady=(0, 24))
+        
+        self.player_label.config(text=f"{title} ({video.get('channel', 'Unknown')})")
+        
+        if not HAS_MPV:
+            self.status.config(text="mpv not available for playback")
+            return
+        
+        # Destroy previous player
+        if hasattr(self, 'mpv_player') and self.mpv_player:
+            try:
+                self.mpv_player.quit()
+            except:
+                pass
+        
+        # Create new mpv player embedded in the container
+        try:
+            self.mpv_player = mpv.MPV(
+                wid=str(self.mpv_container.winfo_id()),
+                ytdl=True,
+                ytdl_hook_enabled=True,
+                keep_open=False,
+                pause=False,
+                idle=False,
+                force_window=True,
+                no_terminal=True,
+                video=True,
+                audio=True,
+                cache=30,
+            )
+            
+            # Play the video
+            self.mpv_player.play(url)
+            
+            # Handle close
+            self.mpv_player.property_observer('idle-active', self._on_mpv_idle)
+            
+        except Exception as e:
+            self.status.config(text=f"Playback error: {e}")
+            self.close_player()
+    
+    def _on_mpv_idle(self, name, value):
+        """Called when mpv becomes idle (video finished)"""
+        if value and hasattr(self, 'mpv_player'):
+            self.close_player()
+    
+    def close_player(self):
+        """Close the video player and return to grid"""
+        if hasattr(self, 'mpv_player') and self.mpv_player:
+            try:
+                self.mpv_player.quit()
+            except:
+                pass
+            self.mpv_player = None
+        
+        self.player_frame.pack_forget()
+        self.grid.pack(fill='both', expand=True, padx=24, pady=(0, 24))
+        self.status.config(text="Ready")
     
     def set_cookies(self):
         path = filedialog.askopenfilename(title="Select YouTube Cookies",
