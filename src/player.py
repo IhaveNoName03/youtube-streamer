@@ -18,14 +18,16 @@ from pathlib import Path
 class PlaybackController:
     """Manages mpv playback with full UI controls"""
     
-    def __init__(self, container, on_close_callback=None):
+    def __init__(self, container, on_close_callback=None, on_close=None):
         """
         Args:
             container: Tkinter widget to embed mpv into
             on_close_callback: function to call when player should close
+            on_close: alias for on_close_callback (for backwards compat)
         """
         self.container = container
-        self.on_close = on_close_callback
+        # Accept both parameter names
+        self.on_close = on_close_callback or on_close
         self.player = None
         self.video_url = None
         self.video_title = None
