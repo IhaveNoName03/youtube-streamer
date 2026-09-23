@@ -326,8 +326,17 @@ class YouTubeStreamApp:
         
         # Create new mpv player embedded in the container
         try:
+            # Ensure the container is realized before getting window ID
+            self.mpv_container.update_idletasks()
+            container_id = self.mpv_container.winfo_id()
+            
+            if container_id == 0:
+                # Fallback: wait a bit and try again
+                self.root.after(100, lambda: self._init_mpv(url))
+                return
+            
             self.mpv_player = mpv.MPV(
-                wid=str(self.mpv_container.winfo_id()),
+                wid=str(container_id),
                 ytdl=True,
                 ytdl_hook_enabled=True,
                 keep_open=False,
@@ -355,14 +364,31 @@ class YouTubeStreamApp:
         if value and hasattr(self, 'mpv_player'):
             self.close_player()
     
+    def _init_mpv(self, url):
+        """Deferred mpv initialization (called after widget is realized)"""
+        try:
+            self.mpv_player = mpv.MPV(
+                wid=str(self.mpv_container.winfo_id()),
+                ytdl=True,
+                ytdl_hook_enabled=True,
+                keep_open=False,
+                pause=False,
+                idle=False,
+                force_window=True,
+                no_terminal=True,
+                video=True,
+                audio=True,
+                cache=30,
+            )
+            
+            self.mpv_player.play(url)
+            self.mpv_player.property_observer('idle-active', self._on_mpv_idle)
+            
+        except Exception as e:
+            self.status.config(text=f"Playback error: {e}")
+            self.close_player()
+
     def close_player(self):
-        """Close the video player and return to grid"""
-        if hasattr(self, 'mpv_player') and self.mpv_player:
-            try:
-                self.mpv_player.quit()
-            except:
-                pass
-            self.mpv_player = None
         
         self.player_frame.pack_forget()
         self.grid.pack(fill='both', expand=True, padx=24, pady=(0, 24))
