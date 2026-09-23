@@ -80,9 +80,12 @@ class UserAuth:
         return salt.hex() + ':' + key.hex()
     
     def verify_password(self, stored, provided):
-        salt, key = stored.split(':')
-        new_key = hashlib.pbkdf2_hmac('sha256', provided.encode(), bytes.fromhex(salt), 100000)
-        return new_key.hex() == key
+        try:
+            salt, key = stored.split(':')
+            new_key = hashlib.pbkdf2_hmac('sha256', provided.encode(), bytes.fromhex(salt), 100000)
+            return new_key.hex() == key
+        except (ValueError, KeyError):
+            return False
     
     def create_user(self, username, password):
         if username in self.users:
@@ -97,6 +100,14 @@ class UserAuth:
         if username not in self.users:
             return False
         return self.verify_password(self.users[username]['password'], password)
+    
+    def delete_user(self, username):
+        """Remove a user account"""
+        if username in self.users:
+            del self.users[username]
+            self.save_users()
+            return True
+        return False
 
 # ============================================================================
 # MAIN APPLICATION
@@ -115,7 +126,7 @@ class YouTubeStreamApp:
         
         self.create_widgets()
         self.start_server()
-        self.show_login_screen()
+        self.show_login()
     
     def create_widgets(self):
         self.main = tk.Frame(self.root, bg='#181818')
@@ -312,71 +323,94 @@ class YouTubeStreamApp:
                  bg='#f44336', fg='white', font=('Segoe UI', 10)).pack(pady=10)
     
     def show_login(self):
+        """Show the login overlay"""
+        for w in self.root.winfo_children():
+            if w != self.main:
+                w.destroy()
+        
         ov = tk.Frame(self.root, bg='#181818')
         ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+        ov.pack_propagate(False)
         
-        lf = tk.Frame(ov, bg='#282828', width=400, height=450)
+        self.overlay = ov
+        
+        lf = tk.Frame(ov, bg='#282828', width=400, height=440)
         lf.pack(expand=True)
         lf.pack_propagate(False)
         
         tk.Label(lf, text="YouTube Stream", font=('Segoe UI', 22, 'bold'),
-                bg='#282828', fg='white').pack(pady=44)
+                bg='#282828', fg='white').pack(pady=40)
         
-        user_e = tk.Entry(lf, font=('Segoe UI', 12), bg='#1e1e1e', fg='white')
-        for lbl in ['Username:', 'Password:']:
-            tk.Label(lf, text=lbl, font=('Segoe UI', 12), bg='#282828', fg='white').pack(pady=(14,6))
-            e = tk.Entry(lf, font=('Segoe UI', 12), bg='#1e1e1e', fg='white',
-                        show='•' if 'Password' in lbl else '')
-            e.pack(fill='x', padx=36, pady=6)
-            e.bind('<Return>', lambda ev: None)
-            if lbl == 'Username:':
-                user_e = e
+        # Username field
+        tk.Label(lf, text="Username:", font=('Segoe UI', 12),
+                bg='#282828', fg='white').pack(pady=(14, 4))
+        self.username_entry = tk.Entry(lf, font=('Segoe UI', 12),
+                                      bg='#1e1e1e', fg='white')
+        self.username_entry.pack(fill='x', padx=40, pady=6)
+        self.username_entry.bind('<Return>', lambda e: self.password_entry.focus_set())
         
-        def login():
-            uname = user_e.get()
-            pwd = lf.winfo_children()[5].get()  # password entry
-            if self.auth.authenticate(uname, pwd):
-                self.auth.current_user = uname
-                ov.destroy()
-                self.status.config(text=f"Logged in: {uname}")
-            else:
-                messagebox.showerror("Error", "Invalid credentials")
+        # Password field
+        tk.Label(lf, text="Password:", font=('Segoe UI', 12),
+                bg='#282828', fg='white').pack(pady=(14, 4))
+        self.password_entry = tk.Entry(lf, font=('Segoe UI', 12),
+                                      bg='#1e1e1e', fg='white', show='•')
+        self.password_entry.pack(fill='x', padx=40, pady=6)
+        self.password_entry.bind('<Return>', lambda e: self.attempt_login())
         
-        def create():
-            dlg2 = tk.Toplevel(lf)
-            dlg2.title("Create Account")
-            dlg2.configure(bg='#181818')
-            
-            tk.Label(dlg2, text="Username:", bg='#181818', fg='white', font=('Segoe UI',11)).pack(pady=8)
-            u = tk.Entry(dlg2, font=('Segoe UI',11), bg='#1e1e1e', fg='white')
-            u.pack(fill='x', padx=30, pady=4)
-            
-            tk.Label(dlg2, text="Password:", bg='#181818', fg='white', font=('Segoe UI',11)).pack(pady=8)
-            p = tk.Entry(dlg2, show='•', font=('Segoe UI',11), bg='#1e1e1e', fg='white')
-            p.pack(fill='x', padx=30, pady=4)
-            
-            def do_create():
-                if not u.get() or not p.get():
-                    return
-                ok, msg = self.auth.create_user(u.get(), p.get())
-                messagebox.showinfo("Result", msg) if ok else messagebox.showerror("Error", msg)
-                if ok:
-                    dlg2.destroy()
-            
-            tk.Button(dlg2, text="Create", command=do_create,
-                     bg='#4caf50', fg='white', font=('Segoe UI',11,'bold')).pack(pady=20)
-        
+        # Buttons
         btns = tk.Frame(lf, bg='#282828')
-        btns.pack(pady=28)
-        tk.Button(btns, text="Login", command=login, bg='#4a90d9', fg='white',
-                 font=('Segoe UI',11,'bold'), width=10).pack(side='left', padx=10)
-        tk.Button(btns, text="Create", command=create, bg='#303030', fg='white',
-                 font=('Segoe UI',11), width=10).pack(side='left', padx=10)
+        btns.pack(pady=30)
+        
+        tk.Button(btns, text="Login", command=self.attempt_login,
+                 bg='#4a90d9', fg='white', font=('Segoe UI', 11, 'bold'),
+                 relief='flat').pack(side='left', padx=(0, 10))
+        
+        tk.Button(btns, text="Create Account", command=self.create_account,
+                 bg='#303030', fg='white', font=('Segoe UI', 11),
+                 relief='flat').pack(side='left', padx=(0, 0))
+        
+        self.username_entry.focus_set()
     
-    def show_login(self):
-        self.show_login(self)
+    def create_account(self):
+        """Open the create account dialog"""
+        dlg = tk.Toplevel(self.overlay)
+        dlg.title("Create Account")
+        dlg.geometry("360x320")
+        dlg.configure(bg='#181818')
+        dlg.grab_set()
+        
+        tk.Label(dlg, text="Create Account", font=('Segoe UI', 16, 'bold'),
+                bg='#181818', fg='white').pack(pady=16)
+        
+        tk.Label(dlg, text="Username:", font=('Segoe UI', 11),
+                bg='#181818', fg='white').pack(pady=(8, 2))
+        user_entry = tk.Entry(dlg, font=('Segoe UI', 11), bg='#1e1e1e', fg='white')
+        user_entry.pack(fill='x', padx=30, pady=4)
+        
+        tk.Label(dlg, text="Password:", font=('Segoe UI', 11),
+                bg='#181818', fg='white').pack(pady=(8, 2))
+        pass_entry = tk.Entry(dlg, show='•', font=('Segoe UI', 11),
+                             bg='#1e1e1e', fg='white')
+        pass_entry.pack(fill='x', padx=30, pady=4)
+        
+        def do_create():
+            u = user_entry.get()
+            p = pass_entry.get()
+            if not u or not p:
+                messagebox.showerror("Error", "All fields required")
+                return
+            ok, msg = self.auth.create_user(u, p)
+            if ok:
+                messagebox.showinfo("Success", msg)
+                dlg.destroy()
+            else:
+                messagebox.showerror("Error", msg)
+        
+        tk.Button(dlg, text="Create", command=do_create,
+                 bg='#4caf50', fg='white', font=('Segoe UI', 11, 'bold')).pack(pady=20, padx=40)
+        
+        dlg.bind('<Return>', lambda e: do_create())
 
-import io
 
 def main():
     root = tk.Tk()
