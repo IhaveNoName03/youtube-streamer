@@ -13,28 +13,27 @@ import tkinter as tk
 from tkinter import ttk
 import mpv
 from pathlib import Path
+from typing import Optional, Callable, Any
 
 
 class PlaybackController:
     """Manages mpv playback with full UI controls"""
     
-    def __init__(self, container, on_close_callback=None, on_close=None):
+    def __init__(self, container: tk.Widget, on_close: Optional[Callable] = None):
         """
         Args:
             container: Tkinter widget to embed mpv into
-            on_close_callback: function to call when player should close
-            on_close: alias for on_close_callback (for backwards compat)
+            on_close: function to call when player should close
         """
         self.container = container
-        # Accept both parameter names
-        self.on_close = on_close_callback or on_close
-        self.player = None
-        self.video_url = None
-        self.video_title = None
+        self.on_close = on_close
+        self.player: Optional[Any] = None
+        self.video_url: Optional[str] = None
+        self.video_title: Optional[str] = None
         
         self._create_ui()
     
-    def _create_ui(self):
+    def _create_ui(self) -> None:
         """Create the playback control UI"""
         # Player container (for mpv to render into)
         self.mpv_container = tk.Frame(self.container, bg='black')
@@ -142,7 +141,7 @@ class PlaybackController:
         if self.player:
             self.player.playback_rate = speed
     
-    def load(self, url, title=None):
+    def load(self, url: str, title: Optional[str] = None) -> None:
         """
         Load a video for playback.
         
@@ -228,7 +227,7 @@ class PlaybackController:
             if self.on_close:
                 self.on_close()
     
-    def toggle_play_pause(self):
+    def toggle_play_pause(self) -> None:
         """Toggle play/pause"""
         if self.player:
             if self.player.pause:
@@ -236,14 +235,14 @@ class PlaybackController:
             else:
                 self.player.pause = True
     
-    def seek(self, seconds):
+    def seek(self, seconds: float) -> None:
         """Seek by seconds (positive = forward, negative = backward)"""
         if self.player and self.player.duration > 0:
             new_pos = self.player.playback_time + seconds
             new_pos = max(0, min(new_pos, self.player.duration))
             self.player.seek = new_pos
     
-    def set_volume(self, value):
+    def set_volume(self, value: float) -> None:
         """Set volume (0-100)"""
         vol = value / 100
         if self.player:

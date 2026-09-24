@@ -37,4 +37,5 @@ env/
 Thumbs.db
 
 # App data
-data/
+/data/
+src/data/*.json
