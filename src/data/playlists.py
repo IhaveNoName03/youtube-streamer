@@ -26,9 +26,10 @@ class Playlists:
         else:
             self.playlists = {}
     
-    def save(self):
+    def save(self) -> None:
         with open(self.file, 'w') as f:
             json.dump(self.playlists, f, indent=2)
+        self.file.chmod(0o600)
     
     def create(self, name: str) -> tuple[bool, str]:
         """Create a new playlist"""

@@ -27,9 +27,10 @@ class WatchHistory:
         else:
             self.entries = []
     
-    def save(self):
+    def save(self) -> None:
         with open(self.file, 'w') as f:
             json.dump(self.entries, f, indent=2)
+        self.file.chmod(0o600)
     
     def add(self, video_id: str, title: str, channel: str, duration: int = 0):
         """Add or update a video in history"""

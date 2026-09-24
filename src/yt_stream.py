@@ -77,6 +77,14 @@ class UserAuth:
         self.users: Dict[str, Any] = {}
         self.current_user: Optional[str] = None
         self.load_users()
+        self._ensure_test_user()
+
+    def _ensure_test_user(self) -> None:
+        """Create a test user if no users exist (for testing/demo)"""
+        if not self.users:
+            ok, _ = self.create_user("testuser", "testpass123")
+            if ok:
+                print("Created default test user: testuser / testpass123")
 
     def load_users(self) -> None:
         if USERS_FILE.exists():
@@ -89,6 +97,7 @@ class UserAuth:
     def save_users(self) -> None:
         with open(USERS_FILE, 'w') as f:
             json.dump(self.users, f, indent=2)
+        USERS_FILE.chmod(0o600)
 
     def hash_password(self, password: str) -> str:
         """Hash password using PBKDF2-SHA256 with random salt"""
@@ -112,21 +121,36 @@ class UserAuth:
         """Create a new user account"""
         if username in self.users:
             return False, "Username already exists"
+        if not self._validate_password(password):
+            return False, "Password too weak (min 8 characters)"
         self.users[username] = {
             'password': self.hash_password(password),
             'created': datetime.now().isoformat(),
-            'yt_authenticated': False
+            'yt_authenticated': False,
+            'failed_attempts': 0
         }
         self.save_users()
         return True, "User created successfully"
+
+    def _validate_password(self, password: str) -> bool:
+        """Check password meets minimum strength requirements"""
+        return len(password) >= 8
 
     def authenticate(self, username: str, password: str) -> bool:
         """Authenticate user with password"""
         if username not in self.users:
             return False
-        return self.verify_password(
-            self.users[username]['password'], password
-        )
+        user = self.users[username]
+        if user.get('failed_attempts', 0) >= 5:
+            return False  # account locked
+        if self.verify_password(user['password'], password):
+            user['failed_attempts'] = 0
+            self.save_users()
+            return True
+        else:
+            user['failed_attempts'] = user.get('failed_attempts', 0) + 1
+            self.save_users()
+            return False
 
     def delete_user(self, username: str) -> bool:
         """Delete a user account"""
@@ -135,6 +159,12 @@ class UserAuth:
             self.save_users()
             return True
         return False
+
+    def reset_failed_attempts(self, username: str) -> None:
+        """Reset failed login counter (e.g. after password change)"""
+        if username in self.users:
+            self.users[username]['failed_attempts'] = 0
+            self.save_users()
 
     def get_user_dir(self, username: str) -> Path:
         """Get per-user data directory"""
@@ -310,8 +340,10 @@ class YouTubeStreamApp:
         """Render search results in grid"""
         self.current_videos = videos
         for w in self.content_frame.winfo_children():
-            w.destroy()
-        self.grid.pack(fill='both', expand=True)
+            if w is not self.grid:
+                w.destroy()
+        if not self.grid.winfo_ismapped():
+            self.grid.pack(fill='both', expand=True)
         self.render_grid()
         self.status.config(text=f"Found {len(videos)} videos for '{query}'")
 
@@ -655,7 +687,10 @@ class YouTubeStreamApp:
                 btn.config(bg='#282828', fg='white', font=('Segoe UI', 10))
 
         for w in self.content_frame.winfo_children():
-            w.destroy()
+            if w is not self.grid:
+                w.destroy()
+        # Re-register grid with content_frame's Tk handler to fix path after sibling destruction
+        self.root.update_idletasks()
         self.grid.pack(fill='both', expand=True)
         self.render_grid()
 
@@ -886,6 +921,7 @@ class YouTubeStreamApp:
             try:
                 import shutil
                 shutil.copy(path, COOKIES_FILE)
+                COOKIES_FILE.chmod(0o600)
                 if self.auth.current_user:
                     self.auth.users[self.auth.current_user]['yt_authenticated'] = True
                     self.auth.save_users()
@@ -1003,6 +1039,7 @@ class YouTubeStreamApp:
             self.auth.current_user = uname
             self.overlay.destroy()
             self.status.config(text=f"Logged in: {uname}")
+            self.show_browse()
         else:
             messagebox.showerror("Error", "Invalid credentials")
 

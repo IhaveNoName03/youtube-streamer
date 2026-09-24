@@ -12,7 +12,6 @@ Full playback controls for the embedded mpv player:
 import tkinter as tk
 from tkinter import ttk
 import mpv
-from pathlib import Path
 from typing import Optional, Callable, Any
 
 
@@ -156,7 +155,7 @@ class PlaybackController:
         if self.player:
             try:
                 self.player.quit()
-            except:
+            except Exception:
                 pass
         
         # Get window ID for embedding
@@ -261,7 +260,7 @@ class PlaybackController:
         if self.player:
             try:
                 self.player.quit()
-            except:
+            except Exception:
                 pass
             self.player = None
         
