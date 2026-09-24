@@ -15,6 +15,14 @@ import mpv
 from typing import Optional, Callable, Any
 
 
+# Palette (matches yt_stream.py)
+SURFACE  = '#161616'
+ELEVATED = '#232323'
+MUTED    = '#8a8a8a'
+WHITE    = '#f2f2f2'
+ACCENT   = '#cc0000'
+
+
 class PlaybackController:
     """Manages mpv playback with full UI controls"""
     
@@ -29,34 +37,34 @@ class PlaybackController:
         self.player: Optional[Any] = None
         self.video_url: Optional[str] = None
         self.video_title: Optional[str] = None
-        
+
         self._create_ui()
-    
+
     def _create_ui(self) -> None:
         """Create the playback control UI"""
         # Player container (for mpv to render into)
         self.mpv_container = tk.Frame(self.container, bg='black')
         self.mpv_container.pack(fill='both', expand=True)
-        
+
         # Control bar at bottom
-        self.control_bar = tk.Frame(self.container, bg='#282828', height=50)
+        self.control_bar = tk.Frame(self.container, bg=ELEVATED, height=50)
         self.control_bar.pack(fill='x', side='bottom')
         self.control_bar.pack_propagate(False)
-        
+
         # Play/Pause button
         self.play_btn = tk.Button(self.control_bar, text="⏸", width=3,
                                   command=self.toggle_play_pause,
-                                  bg='#4a90d9', fg='white',
+                                  bg=ACCENT, fg=WHITE,
                                   font=('Segoe UI', 12, 'bold'),
                                   relief='flat', cursor='hand2')
         self.play_btn.pack(side='left', padx=10)
-        
+
         # Time display
         self.time_label = tk.Label(self.control_bar, text="0:00 / 0:00",
                                    font=('Segoe UI', 10),
-                                   bg='#282828', fg='#cccccc')
+                                   bg=ELEVATED, fg=WHITE)
         self.time_label.pack(side='left', padx=10)
-        
+
         # Seek bar
         self.seek_bar = ttk.Scale(self.control_bar, from_=0, to=100,
                                   orient='horizontal',
@@ -64,38 +72,38 @@ class PlaybackController:
         self.seek_bar.pack(fill='x', side='left', expand=True, padx=(10, 5))
         self.seek_bar.set(0)
         self.seek_bar.configure(state='disabled')  # Enabled when playing
-        
+
         # Volume control
-        tk.Label(self.control_bar, text="🔊", bg='#282828', fg='white',
+        tk.Label(self.control_bar, text="🔊", bg=ELEVATED, fg=WHITE,
                 font=('Segoe UI', 12)).pack(side='left', padx=(5, 0))
         self.volume_slider = ttk.Scale(self.control_bar, from_=0, to=100,
                                         orient='horizontal',
                                         command=self._on_volume_change)
         self.volume_slider.set(100)
         self.volume_slider.pack(side='left', fill='x', expand=True, padx=(0, 5))
-        
+
         # Playback speed
         self.speed_var = tk.StringVar(value="1.0x")
         speed_menu = tk.OptionMenu(self.control_bar, self.speed_var,
                                    "0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x",
                                    command=self._on_speed_change)
-        speed_menu.config(bg='#4a90d9', fg='white', relief='flat',
+        speed_menu.config(bg=ACCENT, fg=WHITE, relief='flat',
                          font=('Segoe UI', 9), highlightthickness=0)
-        speed_menu["menu"].config(bg='#282828', fg='white')
+        speed_menu["menu"].config(bg=SURFACE, fg=WHITE)
         speed_menu.pack(side='left', padx=(5, 10))
-        
+
         # Fullscreen toggle
         self.fullscreen_btn = tk.Button(self.control_bar, text="⛶",
                                         command=self.toggle_fullscreen,
-                                        bg='#282828', fg='white',
+                                        bg=SURFACE, fg=WHITE,
                                         font=('Segoe UI', 10, 'bold'),
                                         relief='flat', cursor='hand2')
         self.fullscreen_btn.pack(side='left', padx=(0, 10))
-        
+
         # Close button
         self.close_btn = tk.Button(self.control_bar, text="✕ Close",
                                    command=self.close,
-                                   bg='#f44336', fg='white',
+                                   bg=ACCENT, fg=WHITE,
                                    font=('Segoe UI', 10, 'bold'),
                                    relief='flat', cursor='hand2')
         self.close_btn.pack(side='right', padx=(0, 10))
