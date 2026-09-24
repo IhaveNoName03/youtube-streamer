@@ -117,12 +117,12 @@ try:
     container.pack()
     container.update_idletasks()
     
-    controller = PlaybackController(container, on_close_callback=lambda: None)
+    controller = PlaybackController(container, on_close=lambda: None)
     results.append(("PlaybackController instantiation", True, "OK"))
-    
+
     try:
         controller.close()
-    except:
+    except Exception:
         pass
     root.destroy()
 except Exception as e:
@@ -152,7 +152,8 @@ except Exception as e:
 # 13. Check flask availability
 try:
     import flask
-    results.append(("Flask available", True, f"version {flask.__version__}"))
+    from importlib.metadata import version as pkg_version
+    results.append(("Flask available", True, f"version {pkg_version('flask')}"))
 except Exception as e:
     results.append(("Flask available", False, str(e)))
 

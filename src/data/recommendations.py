@@ -71,7 +71,7 @@ class Recommendations:
             try:
                 videos = await self.search_func(q, limit - len(results))
                 results.extend(videos)
-            except:
+            except Exception:
                 continue
         return results[:limit]
 
