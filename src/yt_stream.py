@@ -46,6 +46,31 @@ except ImportError:
     print("Warning: data modules not available")
 
 # ============================================================================
+# STYLING
+# ============================================================================
+
+# Cinematic dark palette (Netflix/Vimeo-informed)
+CANVAS   = '#0a0a0a'   # root + content background
+SURFACE  = '#161616'   # cards, panels
+ELEVATED = '#232323'   # control bars, hover state
+THUMB    = '#2a2a2a'   # thumbnail placeholder
+BORDER   = '#3a3a3a'   # hairlines
+MUTED    = '#8a8a8a'   # metadata text
+WHITE    = '#f2f2f2'   # primary text
+# Accent — reserved for primary actions only (search, play, active tab, close)
+ACCENT   = '#cc0000'
+ACCENT_HV = '#e50914'
+
+# Fonts
+TITLE_FONT   = ('Segoe UI', 20, 'bold')
+HEADING_FONT = ('Segoe UI', 12, 'bold')
+BODY_FONT    = ('Segoe UI', 10)
+META_FONT    = ('Segoe UI', 9)
+SMALL_FONT   = ('Segoe UI', 9)
+SEARCH_FONT  = ('Segoe UI', 14)
+
+
+# ============================================================================
 # CONFIG
 # ============================================================================
 
@@ -64,9 +89,6 @@ SERVER_URL = "http://127.0.0.1:5000"
 
 for d in [DATA_DIR, DATA_DIR / "cookies", DOWNLOADS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
-
-
-# ============================================================================
 # AUTH
 # ============================================================================
 
@@ -199,39 +221,41 @@ class YouTubeStreamApp:
 
     def create_widgets(self) -> None:
         """Create main UI widgets"""
-        self.main = tk.Frame(self.root, bg='#181818')
+        self.root.configure(bg=CANVAS)
+
+        self.main = tk.Frame(self.root, bg=CANVAS)
         self.main.pack(fill='both', expand=True, padx=24, pady=24)
 
-        header = tk.Frame(self.main, bg='#090909', height=56)
+        header = tk.Frame(self.main, bg=ELEVATED, height=56)
         header.pack(fill='x')
         tk.Label(
             header, text="🎬 YouTube Stream",
-            font=('Segoe UI', 18, 'bold'),
-            bg='#090909', fg='white'
+            font=TITLE_FONT,
+            bg=ELEVATED, fg=WHITE
         ).pack(pady=14)
 
-        search = tk.Frame(self.main, bg='#181818')
+        search = tk.Frame(self.main, bg=CANVAS)
         search.pack(fill='x', pady=(0, 24))
 
         self.search_var = tk.StringVar()
         self.search_entry = tk.Entry(
             search, textvariable=self.search_var,
-            font=('Segoe UI', 14), bg='#282828', fg='white',
-            insertbackground='white', relief='flat'
+            font=SEARCH_FONT, bg=ELEVATED, fg=WHITE,
+            insertbackground=WHITE, relief='flat'
         )
         self.search_entry.pack(side='left', fill='x', expand=True, padx=(0, 12))
         self.search_entry.bind('<Return>', lambda e: self.search())
 
         tk.Button(
             search, text="Search", command=self.search,
-            bg='#4a90d9', fg='white', font=('Segoe UI', 12, 'bold'),
+            bg=ACCENT, fg=WHITE, font=('Segoe UI', 12, 'bold'),
             relief='flat'
         ).pack(side='right')
 
-        self.content_frame = tk.Frame(self.main, bg='#181818')
+        self.content_frame = tk.Frame(self.main, bg=CANVAS)
         self.content_frame.pack(fill='both', expand=True)
 
-        self.tab_frame = tk.Frame(self.main, bg='#282828')
+        self.tab_frame = tk.Frame(self.main, bg=ELEVATED)
         self.tab_frame.pack(fill='x', pady=(0, 0))
 
         self.tabs: Dict[str, tk.Button] = {}
@@ -242,8 +266,8 @@ class YouTubeStreamApp:
         ]):
             btn = tk.Button(
                 self.tab_frame, text=name, command=cmd,
-                bg='#282828' if i > 0 else '#4a90d9',
-                fg='white' if i > 0 else 'white',
+                bg=ELEVATED if i > 0 else ACCENT,
+                fg=WHITE,
                 font=('Segoe UI', 10, 'bold' if i == 0 else 'normal'),
                 relief='flat', cursor='hand2'
             )
@@ -252,12 +276,13 @@ class YouTubeStreamApp:
 
         self.active_tab = "Browse"
 
-        self.grid = tk.Frame(self.content_frame, bg='#181818')
+        self.grid = tk.Frame(self.content_frame, bg=CANVAS)
+        self.grid.pack(fill='both', expand=True)
 
         self.status = tk.Label(
             self.main, text="Ready",
             font=('Segoe UI', 10),
-            bg='#181818', fg='#888888'
+            bg=CANVAS, fg=MUTED
         )
         self.status.pack(side='bottom', anchor='w', padx=24, pady=(24, 0))
 
@@ -342,8 +367,7 @@ class YouTubeStreamApp:
         for w in self.content_frame.winfo_children():
             if w is not self.grid:
                 w.destroy()
-        if not self.grid.winfo_ismapped():
-            self.grid.pack(fill='both', expand=True)
+        self.grid.pack(fill='both', expand=True)
         self.render_grid()
         self.status.config(text=f"Found {len(videos)} videos for '{query}'")
 
@@ -355,7 +379,7 @@ class YouTubeStreamApp:
         if not self.current_videos:
             tk.Label(
                 self.grid, text="No videos found",
-                fg='#888888', bg='#181818', font=('Segoe UI', 14)
+                fg=MUTED, bg=CANVAS, font=BODY_FONT
             ).pack(expand=True)
             return
 
@@ -363,11 +387,15 @@ class YouTubeStreamApp:
             r, c = i // 4, i % 4
 
             card = tk.Frame(
-                self.grid, bg='#282828', relief='flat', cursor='hand2'
+                self.grid, bg=SURFACE, relief='flat', cursor='hand2'
             )
             card.grid(row=r, column=c, padx=12, pady=12, sticky='nsew')
 
-            thumb = tk.Frame(card, bg='#303030', height=180, width=320)
+            # Hover affordance via palette swap
+            card.bind('<Enter>', lambda e, c=card: c.config(bg=ELEVATED))
+            card.bind('<Leave>', lambda e, c=card: c.config(bg=SURFACE))
+
+            thumb = tk.Frame(card, bg=THUMB, height=180, width=320)
             thumb.pack()
             thumb.grid_propagate(False)
 
@@ -376,15 +404,19 @@ class YouTubeStreamApp:
                     resp = requests.get(v['thumbnail'], timeout=3)
                     img = Image.open(io.BytesIO(resp.content)).resize((320, 180))
                     tk_img = ImageTk.PhotoImage(img)
-                    lbl = tk.Label(thumb, image=tk_img, bg='#303030')
+                    lbl = tk.Label(thumb, image=tk_img, bg=THUMB)
                     lbl.image = tk_img
                     lbl.pack(expand=True, fill='both')
                 except Exception:
                     pass
 
+            # Duration badge if available
+            duration = v.get('duration')
+            dur_str = f" {self._fmt(duration)}" if duration else ""
+
             tk.Label(
-                card, text=v.get('title', 'Unknown')[:80],
-                font=('Segoe UI', 10), bg='#282828', fg='white',
+                card, text=v.get('title', 'Unknown')[:80] + dur_str,
+                font=BODY_FONT, bg=SURFACE, fg=WHITE,
                 wraplength=300
             ).pack(padx=12, pady=6)
 
@@ -396,7 +428,7 @@ class YouTubeStreamApp:
             )
             tk.Label(
                 card, text=f"{v.get('channel', 'Unknown')} • {vs} views",
-                font=('Segoe UI', 9), bg='#282828', fg='#888888'
+                font=META_FONT, bg=SURFACE, fg=MUTED
             ).pack(padx=12, pady=(0, 12))
 
             card.bind('<Button-1>', lambda e, vid=v: self.play_video(vid))
@@ -411,36 +443,36 @@ class YouTubeStreamApp:
         )
         self.player_canvas.pack(fill='both', expand=True)
 
-        info_bar = tk.Frame(self.content_frame, bg='#1a1a1a')
+        info_bar = tk.Frame(self.content_frame, bg=ELEVATED)
         info_bar.pack(fill='x', pady=(0, 0))
         tk.Label(
             info_bar, text=video.get('title', 'Unknown'),
-            font=('Segoe UI', 11, 'bold'),
-            bg='#1a1a1a', fg='white'
+            font=HEADING_FONT,
+            bg=ELEVATED, fg=WHITE
         ).pack(side='left', padx=10)
         tk.Label(
             info_bar, text=video.get('channel', 'Unknown'),
-            font=('Segoe UI', 9),
-            bg='#1a1a1a', fg='#888888'
+            font=META_FONT,
+            bg=ELEVATED, fg=MUTED
         ).pack(side='left', padx=(0, 10))
 
-        self.control_bar = tk.Frame(self.content_frame, bg='#282828', height=60)
+        self.control_bar = tk.Frame(self.content_frame, bg=ELEVATED, height=46)
         self.control_bar.pack(fill='x')
         self.control_bar.pack_propagate(False)
 
         self.play_btn = tk.Button(
             self.control_bar, text="⏸", width=3,
             command=self.toggle_play_pause,
-            bg='#4a90d9', fg='white', font=('Segoe UI', 14, 'bold'),
+            bg=ACCENT, fg=WHITE, font=('Segoe UI', 12, 'bold'),
             relief='flat', cursor='hand2'
         )
-        self.play_btn.pack(side='left', padx=10)
+        self.play_btn.pack(side='left', padx=8)
 
         self.time_lbl = tk.Label(
             self.control_bar, text="0:00 / 0:00",
-            font=('Segoe UI', 10), bg='#282828', fg='#cccccc'
+            font=('Segoe UI', 9), bg=ELEVATED, fg=WHITE
         )
-        self.time_lbl.pack(side='left', padx=10)
+        self.time_lbl.pack(side='left', padx=8)
 
         self.seek_var = tk.DoubleVar()
         self.seek_bar = ttk.Scale(
@@ -448,19 +480,19 @@ class YouTubeStreamApp:
             variable=self.seek_var, orient='horizontal',
             command=self._on_seek_drag
         )
-        self.seek_bar.pack(fill='x', side='left', expand=True, padx=(10, 5))
+        self.seek_bar.pack(fill='x', side='left', expand=True, padx=(8, 4))
 
         tk.Label(
-            self.control_bar, text="🔊", bg='#282828', fg='white',
-            font=('Segoe UI', 12)
-        ).pack(side='left', padx=(5, 2))
+            self.control_bar, text="🔊", bg=ELEVATED, fg=WHITE,
+            font=('Segoe UI', 10)
+        ).pack(side='left', padx=(4, 2))
         self.volume_var = tk.DoubleVar(value=100)
         self.volume_bar = ttk.Scale(
             self.control_bar, from_=0, to=100,
             variable=self.volume_var, orient='horizontal',
             command=self._on_volume_change
         )
-        self.volume_bar.pack(side='left', fill='x', expand=True, padx=(0, 5))
+        self.volume_bar.pack(side='left', fill='x', expand=True, padx=(0, 4))
 
         self.speed_var = tk.StringVar(value="1.0x")
         self.speed_menu = tk.OptionMenu(
@@ -469,29 +501,29 @@ class YouTubeStreamApp:
             command=self._on_speed_change
         )
         self.speed_menu.config(
-            bg='#4a90d9', fg='white', relief='flat',
-            font=('Segoe UI', 9), highlightthickness=0, width=5
+            bg=ELEVATED, fg=WHITE, relief='flat',
+            font=('Segoe UI', 8), highlightthickness=0, width=4
         )
-        self.speed_menu["menu"].config(bg='#282828', fg='white')
-        self.speed_menu.pack(side='left', padx=(0, 10))
+        self.speed_menu["menu"].config(bg=SURFACE, fg=WHITE)
+        self.speed_menu.pack(side='left', padx=(0, 8))
 
         tk.Button(
             self.control_bar, text="⛶", command=self.toggle_fullscreen,
-            bg='#282828', fg='white', font=('Segoe UI', 10, 'bold'),
+            bg=SURFACE, fg=WHITE, font=('Segoe UI', 9, 'bold'),
             relief='flat', cursor='hand2'
-        ).pack(side='left', padx=(0, 5))
+        ).pack(side='left', padx=(0, 4))
 
         tk.Button(
             self.control_bar, text="+ Playlist", command=self.add_to_playlist,
-            bg='#282828', fg='white', font=('Segoe UI', 9),
+            bg=SURFACE, fg=WHITE, font=('Segoe UI', 8),
             relief='flat', cursor='hand2'
-        ).pack(side='left', padx=(0, 10))
+        ).pack(side='left', padx=(0, 6))
 
         tk.Button(
             self.control_bar, text="✕ Close", command=self.close_player,
-            bg='#f44336', fg='white', font=('Segoe UI', 10, 'bold'),
+            bg=ACCENT, fg=WHITE, font=('Segoe UI', 9, 'bold'),
             relief='flat', cursor='hand2'
-        ).pack(side='right', padx=(0, 10))
+        ).pack(side='right', padx=(4, 8))
 
     def init_mpv(self, video: Dict) -> None:
         """Initialize mpv player after UI is ready"""
@@ -582,7 +614,8 @@ class YouTubeStreamApp:
             self.player = None
 
         for w in self.content_frame.winfo_children():
-            w.destroy()
+            if w is not self.grid:
+                w.destroy()
 
         self.show_browse()
         self.status.config(text="Ready")
@@ -681,16 +714,15 @@ class YouTubeStreamApp:
         for name, btn in self.tabs.items():
             if name == "Browse":
                 btn.config(
-                    bg='#4a90d9', fg='white', font=('Segoe UI', 10, 'bold')
+                    bg=ACCENT, fg=WHITE, font=('Segoe UI', 10, 'bold')
                 )
             else:
-                btn.config(bg='#282828', fg='white', font=('Segoe UI', 10))
+                btn.config(bg=ELEVATED, fg=WHITE, font=('Segoe UI', 10))
 
         for w in self.content_frame.winfo_children():
             if w is not self.grid:
                 w.destroy()
-        # Re-register grid with content_frame's Tk handler to fix path after sibling destruction
-        self.root.update_idletasks()
+
         self.grid.pack(fill='both', expand=True)
         self.render_grid()
 
@@ -698,18 +730,19 @@ class YouTubeStreamApp:
         """Show watch history tab"""
         self.active_tab = "History"
         for name, btn in self.tabs.items():
-            btn.config(bg='#282828', fg='white', font=('Segoe UI', 10))
+            btn.config(bg=ELEVATED, fg=WHITE, font=('Segoe UI', 10))
         self.tabs["History"].config(
-            bg='#4a90d9', fg='white', font=('Segoe UI', 10, 'bold')
+            bg=ACCENT, fg=WHITE, font=('Segoe UI', 10, 'bold')
         )
 
         for w in self.content_frame.winfo_children():
-            w.destroy()
+            if w is not self.grid:
+                w.destroy()
 
         if not self.auth.current_user:
             tk.Label(
                 self.content_frame, text="Login to view history",
-                font=('Segoe UI', 14), bg='#181818', fg='#888888'
+                font=BODY_FONT, bg=CANVAS, fg=MUTED
             ).pack(expand=True)
             return
 
@@ -720,19 +753,19 @@ class YouTubeStreamApp:
         if not entries:
             tk.Label(
                 self.content_frame, text="No watch history",
-                font=('Segoe UI', 14), bg='#181818', fg='#888888'
+                font=BODY_FONT, bg=CANVAS, fg=MUTED
             ).pack(expand=True)
             return
 
-        list_frame = tk.Frame(self.content_frame, bg='#181818')
+        list_frame = tk.Frame(self.content_frame, bg=CANVAS)
         list_frame.pack(fill='both', expand=True)
 
-        scroll = tk.Frame(list_frame, bg='#282828')
+        scroll = tk.Frame(list_frame, bg=ELEVATED)
         scroll.pack(fill='both', expand=True)
 
         lb = tk.Listbox(
-            scroll, bg='#1e1e1e', fg='white', font=('Segoe UI', 10),
-            selectbackground='#4a90d9'
+            scroll, bg='#1e1e1e', fg=WHITE, font=('Segoe UI', 10),
+            selectbackground=ACCENT
         )
         lb.pack(side='left', fill='both', expand=True)
 
@@ -772,18 +805,19 @@ class YouTubeStreamApp:
         """Show playlists tab"""
         self.active_tab = "Playlists"
         for name, btn in self.tabs.items():
-            btn.config(bg='#282828', fg='white', font=('Segoe UI', 10))
+            btn.config(bg=ELEVATED, fg=WHITE, font=('Segoe UI', 10))
         self.tabs["Playlists"].config(
-            bg='#4a90d9', fg='white', font=('Segoe UI', 10, 'bold')
+            bg=ACCENT, fg=WHITE, font=('Segoe UI', 10, 'bold')
         )
 
         for w in self.content_frame.winfo_children():
-            w.destroy()
+            if w is not self.grid:
+                w.destroy()
 
         if not self.auth.current_user:
             tk.Label(
                 self.content_frame, text="Login to use playlists",
-                font=('Segoe UI', 14), bg='#181818', fg='#888888'
+                font=BODY_FONT, bg=CANVAS, fg=MUTED
             ).pack(expand=True)
             return
 
@@ -794,20 +828,20 @@ class YouTubeStreamApp:
         if not names:
             tk.Label(
                 self.content_frame, text="No playlists yet",
-                font=('Segoe UI', 14), bg='#181818', fg='#888888'
+                font=BODY_FONT, bg=CANVAS, fg=MUTED
             ).pack(expand=True)
 
             tk.Label(
                 self.content_frame, text="Create your first playlist:",
-                font=('Segoe UI', 11), bg='#181818', fg='#888888'
+                font=META_FONT, bg=CANVAS, fg=MUTED
             ).pack(pady=(0, 10))
 
-            create_frame = tk.Frame(self.content_frame, bg='#181818')
+            create_frame = tk.Frame(self.content_frame, bg=CANVAS)
             create_frame.pack(fill='x', padx=20)
 
             name_entry = tk.Entry(
                 create_frame, font=('Segoe UI', 11),
-                bg='#1e1e1e', fg='white'
+                bg='#1e1e1e', fg=WHITE
             )
             name_entry.pack(fill='x', padx=20, pady=5)
 
@@ -823,42 +857,42 @@ class YouTubeStreamApp:
 
             tk.Button(
                 create_frame, text="Create", command=do_create,
-                bg='#4caf50', fg='white', font=('Segoe UI', 10, 'bold')
+                bg='#4caf50', fg=WHITE, font=('Segoe UI', 10, 'bold')
             ).pack(pady=5)
             return
 
-        list_frame = tk.Frame(self.content_frame, bg='#181818')
+        list_frame = tk.Frame(self.content_frame, bg=CANVAS)
         list_frame.pack(fill='both', expand=True)
 
         for i, name in enumerate(names):
             card = tk.Frame(
-                list_frame, bg='#282828', relief='flat'
+                list_frame, bg=ELEVATED, relief='flat'
             )
             card.grid(row=i // 2, column=i % 2, padx=12, pady=12, sticky='nsew')
 
             count = len(playlists.get(name))
             tk.Label(
-                card, text=name, font=('Segoe UI', 12, 'bold'),
-                bg='#282828', fg='white'
+                card, text=name, font=HEADING_FONT,
+                bg=ELEVATED, fg=WHITE
             ).pack(padx=12, pady=8)
             tk.Label(
                 card, text=f"{count} video{'s' if count != 1 else ''}",
-                font=('Segoe UI', 9), bg='#282828', fg='#888888'
+                font=META_FONT, bg=ELEVATED, fg=MUTED
             ).pack(padx=12)
 
-            btn_frame = tk.Frame(card, bg='#282828')
+            btn_frame = tk.Frame(card, bg=ELEVATED)
             btn_frame.pack(padx=12, pady=(0, 8))
 
             tk.Button(
                 btn_frame, text="Play",
                 command=lambda n=name: self._play_playlist(n),
-                bg='#4a90d9', fg='white', font=('Segoe UI', 9),
+                bg=ACCENT, fg=WHITE, font=('Segoe UI', 9),
                 relief='flat', width=8
             ).pack(side='left', padx=2)
             tk.Button(
                 btn_frame, text="Delete",
                 command=lambda n=name: self._delete_playlist(n),
-                bg='#f44336', fg='white', font=('Segoe UI', 9),
+                bg='#f44336', fg=WHITE, font=('Segoe UI', 9),
                 relief='flat', width=8
             ).pack(side='left', padx=2)
 
@@ -934,16 +968,16 @@ class YouTubeStreamApp:
         dlg = tk.Toplevel(self.root)
         dlg.title("Accounts")
         dlg.geometry("360x340")
-        dlg.configure(bg='#181818')
+        dlg.configure(bg=CANVAS)
         dlg.grab_set()
 
         tk.Label(
             dlg, text="User Accounts",
             font=('Segoe UI', 16, 'bold'),
-            bg='#181818', fg='white'
+            bg=CANVAS, fg=WHITE
         ).pack(pady=16)
 
-        lb = tk.Listbox(dlg, bg='#1e1e1e', fg='white', height=8)
+        lb = tk.Listbox(dlg, bg='#1e1e1e', fg=WHITE, height=8)
         lb.pack(fill='both', padx=20, pady=10, expand=True)
 
         for u in self.auth.users:
@@ -960,7 +994,7 @@ class YouTubeStreamApp:
 
         tk.Button(
             dlg, text="Delete Selected", command=del_user,
-            bg='#f44336', fg='white', font=('Segoe UI', 10)
+            bg='#f44336', fg=WHITE, font=('Segoe UI', 10)
         ).pack(pady=10)
 
     def show_login(self) -> None:
@@ -969,30 +1003,30 @@ class YouTubeStreamApp:
             if w != self.main:
                 w.destroy()
 
-        ov = tk.Frame(self.root, bg='#181818')
+        ov = tk.Frame(self.root, bg=CANVAS)
         ov.place(relx=0, rely=0, relwidth=1, relheight=1)
         ov.pack_propagate(False)
 
         self.overlay = ov
 
-        lf = tk.Frame(ov, bg='#282828', width=400, height=440)
+        lf = tk.Frame(ov, bg=ELEVATED, width=400, height=440)
         lf.pack(expand=True)
         lf.pack_propagate(False)
 
         tk.Label(
             lf, text="YouTube Stream",
             font=('Segoe UI', 22, 'bold'),
-            bg='#282828', fg='white'
+            bg=ELEVATED, fg=WHITE
         ).pack(pady=40)
 
         tk.Label(
             lf, text="Username:",
             font=('Segoe UI', 12),
-            bg='#282828', fg='white'
+            bg=ELEVATED, fg=WHITE
         ).pack(pady=(14, 4))
         self.username_entry = tk.Entry(
             lf, font=('Segoe UI', 12),
-            bg='#1e1e1e', fg='white'
+            bg='#1e1e1e', fg=WHITE
         )
         self.username_entry.pack(fill='x', padx=40, pady=6)
         self.username_entry.bind(
@@ -1002,29 +1036,29 @@ class YouTubeStreamApp:
         tk.Label(
             lf, text="Password:",
             font=('Segoe UI', 12),
-            bg='#282828', fg='white'
+            bg=ELEVATED, fg=WHITE
         ).pack(pady=(14, 4))
         self.password_entry = tk.Entry(
             lf, font=('Segoe UI', 12),
-            bg='#1e1e1e', fg='white', show='•'
+            bg='#1e1e1e', fg=WHITE, show='•'
         )
         self.password_entry.pack(fill='x', padx=40, pady=6)
         self.password_entry.bind(
             '<Return>', lambda e: self.attempt_login()
         )
 
-        btns = tk.Frame(lf, bg='#282828')
+        btns = tk.Frame(lf, bg=ELEVATED)
         btns.pack(pady=30)
 
         tk.Button(
             btns, text="Login", command=self.attempt_login,
-            bg='#4a90d9', fg='white', font=('Segoe UI', 11, 'bold'),
+            bg=ACCENT, fg=WHITE, font=('Segoe UI', 11, 'bold'),
             relief='flat'
         ).pack(side='left', padx=(0, 10))
 
         tk.Button(
             btns, text="Create Account", command=self.create_account,
-            bg='#303030', fg='white', font=('Segoe UI', 11),
+            bg=SURFACE, fg=WHITE, font=('Segoe UI', 11),
             relief='flat'
         ).pack(side='left', padx=(0, 0))
 
@@ -1048,31 +1082,31 @@ class YouTubeStreamApp:
         dlg = tk.Toplevel(self.overlay)
         dlg.title("Create Account")
         dlg.geometry("360x320")
-        dlg.configure(bg='#181818')
+        dlg.configure(bg=CANVAS)
         dlg.grab_set()
 
         tk.Label(
             dlg, text="Create Account",
             font=('Segoe UI', 16, 'bold'),
-            bg='#181818', fg='white'
+            bg=CANVAS, fg=WHITE
         ).pack(pady=16)
 
         tk.Label(
             dlg, text="Username:",
             font=('Segoe UI', 11),
-            bg='#181818', fg='white'
+            bg=CANVAS, fg=WHITE
         ).pack(pady=(8, 2))
-        user_entry = tk.Entry(dlg, font=('Segoe UI', 11), bg='#1e1e1e', fg='white')
+        user_entry = tk.Entry(dlg, font=('Segoe UI', 11), bg='#1e1e1e', fg=WHITE)
         user_entry.pack(fill='x', padx=30, pady=4)
 
         tk.Label(
             dlg, text="Password:",
             font=('Segoe UI', 11),
-            bg='#181818', fg='white'
+            bg=CANVAS, fg=WHITE
         ).pack(pady=(8, 2))
         pass_entry = tk.Entry(
             dlg, show='•', font=('Segoe UI', 11),
-            bg='#1e1e1e', fg='white'
+            bg='#1e1e1e', fg=WHITE
         )
         pass_entry.pack(fill='x', padx=30, pady=4)
 
@@ -1091,7 +1125,7 @@ class YouTubeStreamApp:
 
         tk.Button(
             dlg, text="Create", command=do_create,
-            bg='#4caf50', fg='white', font=('Segoe UI', 11, 'bold')
+            bg='#4caf50', fg=WHITE, font=('Segoe UI', 11, 'bold')
         ).pack(pady=20, padx=40)
 
         dlg.bind('<Return>', lambda e: do_create())
@@ -1107,7 +1141,8 @@ class YouTubeStreamApp:
         self.status.config(text=f"Playing: {title[:40]}...")
 
         for w in self.content_frame.winfo_children():
-            w.destroy()
+            if w is not self.grid:
+                w.destroy()
 
         self._init_player_ui(video)
 
