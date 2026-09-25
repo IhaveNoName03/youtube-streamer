@@ -77,7 +77,8 @@ SEARCH_FONT  = ('Segoe UI', 14)
 if getattr(sys, 'frozen', False):
     APP_DIR = Path(sys.executable).parent
 else:
-    APP_DIR = Path(__file__).parent.resolve()
+    # Anchor to project root (one level up from src/)
+    APP_DIR = Path(__file__).resolve().parent.parent
 
 DATA_DIR = APP_DIR / "data"
 USERS_FILE = DATA_DIR / "users.json"
@@ -226,16 +227,33 @@ class YouTubeStreamApp:
         self.main = tk.Frame(self.root, bg=CANVAS)
         self.main.pack(fill='both', expand=True, padx=24, pady=24)
 
-        header = tk.Frame(self.main, bg=ELEVATED, height=56)
+        # Header
+        header = tk.Frame(self.main, bg=ELEVATED, height=52)
         header.pack(fill='x')
         tk.Label(
-            header, text="🎬 YouTube Stream",
-            font=TITLE_FONT,
+            header, text="youtube stream",
+            font=('Segoe UI', 18, 'bold'),
             bg=ELEVATED, fg=WHITE
-        ).pack(pady=14)
+        ).pack(side='left', padx=10)
+        tk.Label(
+            header, text="ad-free • embedded mpv",
+            font=('Segoe UI', 9),
+            bg=ELEVATED, fg=MUTED
+        ).pack(side='right', padx=10)
+
+        # Category pills
+        cat_frame = tk.Frame(self.main, bg=CANVAS)
+        cat_frame.pack(fill='x', pady=(16, 4))
+        cats = ["Trending", "Music", "Gaming", "Live", "News", "Sports"]
+        for c in cats:
+            tk.Button(
+                cat_frame, text=c,
+                bg=SURFACE, fg=MUTED, font=('Segoe UI', 10),
+                relief='flat', cursor='hand2', height=1
+            ).pack(side='left', padx=4, pady=2)
 
         search = tk.Frame(self.main, bg=CANVAS)
-        search.pack(fill='x', pady=(0, 24))
+        search.pack(fill='x', pady=(8, 16))
 
         self.search_var = tk.StringVar()
         self.search_entry = tk.Entry(
@@ -245,18 +263,34 @@ class YouTubeStreamApp:
         )
         self.search_entry.pack(side='left', fill='x', expand=True, padx=(0, 12))
         self.search_entry.bind('<Return>', lambda e: self.search())
+        self.search_entry.bind('<Return>', lambda e: self._search_category("All"))
+
+        catInner = tk.Frame(search, bg=CANVAS)
+        catInner.pack(side='right', padx=(4, 0), pady=2)
+
+        categories = ["All", "Music", "Gaming", "Live", "News", "Sports", "Shorts"]
+        for i, c in enumerate(categories):
+            is_all = (c == "All")
+            btn = tk.Button(
+                catInner, text=c,
+                bg=ACCENT if is_all else SURFACE, fg=WHITE if is_all else MUTED,
+                font=('Segoe UI', 9, 'bold' if is_all else 'normal'),
+                relief='flat', cursor='hand2', height=1, padx=8
+            )
+            btn.pack(side='left', padx=(0, 2), pady=3)
+            btn.bind('<Button-1>', lambda e, cat=c: self._search_category(cat))
 
         tk.Button(
-            search, text="Search", command=self.search,
+            search, text="Search", command=lambda: self.search(),
             bg=ACCENT, fg=WHITE, font=('Segoe UI', 12, 'bold'),
             relief='flat'
         ).pack(side='right')
 
-        self.content_frame = tk.Frame(self.main, bg=CANVAS)
-        self.content_frame.pack(fill='both', expand=True)
-
         self.tab_frame = tk.Frame(self.main, bg=ELEVATED)
-        self.tab_frame.pack(fill='x', pady=(0, 0))
+        self.tab_frame.pack(fill='x', side='bottom')
+
+        self.content_frame = tk.Frame(self.main, bg=CANVAS)
+        self.content_frame.pack(fill='both', expand=True, padx=0, pady=(0, 6))
 
         self.tabs: Dict[str, tk.Button] = {}
         for i, (name, cmd) in enumerate([
@@ -347,6 +381,20 @@ class YouTubeStreamApp:
 
         threading.Thread(target=self._do_search, args=(query,), daemon=True).start()
 
+    def _search_category(self, override_cat=None) -> None:
+        """Search with optional category filter."""
+        cat = override_cat or "All"
+        query = self.search_var.get().strip()
+        if cat == "All":
+            q = query
+        elif query:
+            q = f"{cat} {query}"
+        else:
+            q = cat
+        self.current_videos = []
+        self.status.config(text=f"Searching {cat}: {query or cat}...")
+        threading.Thread(target=self._do_search, args=(q,), daemon=True).start()
+
     def _do_search(self, query: str) -> None:
         """Perform search via Flask API"""
         try:
@@ -368,8 +416,31 @@ class YouTubeStreamApp:
             if w is not self.grid:
                 w.destroy()
         self.grid.pack(fill='both', expand=True)
+        if not self.current_videos:
+            self.status.config(text="Loading trending videos...")
+            threading.Thread(target=self._load_trending, daemon=True).start()
+        else:
+            self.render_grid()
+            self.status.config(text=f"Found {len(self.current_videos)} videos")
+
+    def _load_trending(self) -> None:
+        """Load trending videos from server"""
+        try:
+            resp = requests.get(
+                f'{SERVER_URL}/api/search',
+                params={'q': 'trending'}, timeout=10
+            )
+            data = resp.json()
+            videos = data.get('videos', [])
+            self.root.after(0, lambda: self._on_trending_loaded(videos))
+        except Exception as e:
+            self.root.after(0, lambda: self.status.config(text=f"Trending error: {e}"))
+
+    def _on_trending_loaded(self, videos: List[Dict]) -> None:
+        """Handle trending videos loaded"""
+        self.current_videos = videos
         self.render_grid()
-        self.status.config(text=f"Found {len(videos)} videos for '{query}'")
+        self.status.config(text=f"Found {len(videos)} trending videos")
 
     def render_grid(self) -> None:
         """Render video grid with thumbnails and titles"""
@@ -724,7 +795,12 @@ class YouTubeStreamApp:
                 w.destroy()
 
         self.grid.pack(fill='both', expand=True)
-        self.render_grid()
+        if not self.current_videos:
+            self.status.config(text="Loading trending videos...")
+            threading.Thread(target=self._load_trending, daemon=True).start()
+        else:
+            self.render_grid()
+            self.status.config(text=f"Found {len(self.current_videos)} videos")
 
     def show_history(self) -> None:
         """Show watch history tab"""
@@ -998,71 +1074,130 @@ class YouTubeStreamApp:
         ).pack(pady=10)
 
     def show_login(self) -> None:
-        """Show login/overlay screen"""
+        """Show login/overlay screen — modern clean website style"""
         for w in self.root.winfo_children():
             if w != self.main:
                 w.destroy()
 
         ov = tk.Frame(self.root, bg=CANVAS)
         ov.place(relx=0, rely=0, relwidth=1, relheight=1)
-        ov.pack_propagate(False)
 
         self.overlay = ov
 
-        lf = tk.Frame(ov, bg=ELEVATED, width=400, height=440)
-        lf.pack(expand=True)
-        lf.pack_propagate(False)
+        # Subtle radial gradient via layered frames (Tkinter limitation: solid only,
+        # so we fake depth with a slightly lighter center glow)
+        bg_glow = tk.Frame(ov, bg='#141414')
+        bg_glow.place(relx=0.5, rely=0.5, relwidth=0.7, relheight=0.7, anchor='center')
+
+        # Centered card — generous proportions, minimal chrome
+        card = tk.Frame(ov, bg=SURFACE, width=400, height=460)
+        card.pack(expand=True)
+
+        # Thin top hairline
+        tk.Frame(card, bg=BORDER, height=1).pack(fill='x', side='top')
+
+        # Brand: clean wordmark, no icon clutter
+        tk.Label(
+            card, text="youtube stream",
+            font=('Segoe UI', 26, 'bold'),
+            bg=SURFACE, fg=WHITE
+        ).pack(pady=(32, 2))
 
         tk.Label(
-            lf, text="YouTube Stream",
-            font=('Segoe UI', 22, 'bold'),
-            bg=ELEVATED, fg=WHITE
-        ).pack(pady=40)
+            card, text="Sign in",
+            font=('Segoe UI', 11),
+            bg=SURFACE, fg=MUTED
+        ).pack(pady=(0, 32))
 
+        # Username
         tk.Label(
-            lf, text="Username:",
-            font=('Segoe UI', 12),
-            bg=ELEVATED, fg=WHITE
-        ).pack(pady=(14, 4))
+            card, text="Username",
+            font=('Segoe UI', 10),
+            bg=SURFACE, fg=MUTED
+        ).pack(anchor='w', padx=28)
+
         self.username_entry = tk.Entry(
-            lf, font=('Segoe UI', 12),
-            bg='#1e1e1e', fg=WHITE
+            card, font=('Segoe UI', 13),
+            bg='#0e0e0e', fg=WHITE,
+            insertbackground=WHITE,
+            relief='flat', highlightthickness=0,
+            bd=0, selectbackground=ACCENT
         )
-        self.username_entry.pack(fill='x', padx=40, pady=6)
+        self.username_entry.pack(fill='x', padx=28, pady=(6, 20))
         self.username_entry.bind(
             '<Return>', lambda e: self.password_entry.focus_set()
         )
 
+        # Password
         tk.Label(
-            lf, text="Password:",
-            font=('Segoe UI', 12),
-            bg=ELEVATED, fg=WHITE
-        ).pack(pady=(14, 4))
+            card, text="Password",
+            font=('Segoe UI', 10),
+            bg=SURFACE, fg=MUTED
+        ).pack(anchor='w', padx=28)
+
+        pw_frame = tk.Frame(card, bg=SURFACE)
+        pw_frame.pack(fill='x', padx=28, pady=(6, 24))
+
         self.password_entry = tk.Entry(
-            lf, font=('Segoe UI', 12),
-            bg='#1e1e1e', fg=WHITE, show='•'
+            pw_frame, font=('Segoe UI', 13),
+            bg='#0e0e0e', fg=WHITE,
+            insertbackground=WHITE,
+            relief='flat', highlightthickness=0,
+            bd=0, show='•', selectbackground=ACCENT
         )
-        self.password_entry.pack(fill='x', padx=40, pady=6)
+        self.password_entry.pack(side='left', fill='x', expand=True)
         self.password_entry.bind(
             '<Return>', lambda e: self.attempt_login()
         )
 
-        btns = tk.Frame(lf, bg=ELEVATED)
-        btns.pack(pady=30)
+        # Password visibility toggle (subtle)
+        self.show_pw = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            pw_frame, text="show",
+            variable=self.show_pw,
+            bg=SURFACE, fg=MUTED,
+            activebackground=SURFACE, activeforeground=MUTED,
+            selectcolor=SURFACE,
+            font=('Segoe UI', 9),
+            command=self._toggle_password_visibility
+        ).pack(side='right', padx=(8, 0))
+
+        # Divider
+        tk.Frame(card, bg=BORDER, height=1).pack(fill='x', padx=28, pady=(0, 20))
+
+        # Buttons — primary first, secondary ghost
+        tk.Button(
+            card, text="Sign in",
+            command=self.attempt_login,
+            bg=ACCENT, fg=WHITE,
+            font=('Segoe UI', 13, 'bold'),
+            relief='flat', cursor='hand2',
+            height=1
+        ).pack(fill='x', padx=28, pady=(0, 10))
 
         tk.Button(
-            btns, text="Login", command=self.attempt_login,
-            bg=ACCENT, fg=WHITE, font=('Segoe UI', 11, 'bold'),
-            relief='flat'
-        ).pack(side='left', padx=(0, 10))
+            card, text="Create account",
+            command=self.create_account,
+            bg=SURFACE, fg=MUTED,
+            font=('Segoe UI', 11),
+            relief='flat', cursor='hand2',
+            height=1,
+            highlightthickness=0
+        ).pack(fill='x', padx=28, pady=(0, 0))
 
-        tk.Button(
-            btns, text="Create Account", command=self.create_account,
-            bg=SURFACE, fg=WHITE, font=('Segoe UI', 11),
-            relief='flat'
-        ).pack(side='left', padx=(0, 0))
+        # Footer — minimal, one line
+        tk.Frame(card, bg=BORDER, height=1).pack(fill='x', side='bottom')
+        tk.Label(
+            card, text="YouTube cookies unlock Premium — import in Settings",
+            font=('Segoe UI', 9),
+            bg=SURFACE, fg=MUTED
+        ).pack(pady=(16, 24))
 
         self.username_entry.focus_set()
+
+    def _toggle_password_visibility(self) -> None:
+        """Toggle password field visibility"""
+        self.password_entry.config(show='' if self.show_pw.get() else '•')
 
     def attempt_login(self) -> None:
         """Attempt login with provided credentials"""
@@ -1081,34 +1216,69 @@ class YouTubeStreamApp:
         """Show create account dialog"""
         dlg = tk.Toplevel(self.overlay)
         dlg.title("Create Account")
-        dlg.geometry("360x320")
-        dlg.configure(bg=CANVAS)
+        dlg.geometry("340x300")
+        dlg.configure(bg=SURFACE)
         dlg.grab_set()
+        dlg.resizable(False, False)
+
+        # Dialog accent bar
+        tk.Frame(dlg, bg=ACCENT, height=3).pack(fill='x', side='top')
 
         tk.Label(
             dlg, text="Create Account",
             font=('Segoe UI', 16, 'bold'),
-            bg=CANVAS, fg=WHITE
-        ).pack(pady=16)
+            bg=SURFACE, fg=WHITE
+        ).pack(pady=(14, 4))
 
         tk.Label(
-            dlg, text="Username:",
-            font=('Segoe UI', 11),
-            bg=CANVAS, fg=WHITE
-        ).pack(pady=(8, 2))
-        user_entry = tk.Entry(dlg, font=('Segoe UI', 11), bg='#1e1e1e', fg=WHITE)
-        user_entry.pack(fill='x', padx=30, pady=4)
+            dlg, text="Enter your details below",
+            font=('Segoe UI', 9),
+            bg=SURFACE, fg=MUTED
+        ).pack(pady=(0, 16))
 
         tk.Label(
-            dlg, text="Password:",
-            font=('Segoe UI', 11),
-            bg=CANVAS, fg=WHITE
-        ).pack(pady=(8, 2))
-        pass_entry = tk.Entry(
-            dlg, show='•', font=('Segoe UI', 11),
-            bg='#1e1e1e', fg=WHITE
+            dlg, text="Username",
+            font=('Segoe UI', 10, 'bold'),
+            bg=SURFACE, fg=MUTED
+        ).pack(anchor='w', padx=20)
+
+        user_entry = tk.Entry(
+            dlg, font=('Segoe UI', 11),
+            bg='#1a1a1a', fg=WHITE,
+            insertbackground=WHITE,
+            relief='flat', highlightthickness=0, bd=0
         )
-        pass_entry.pack(fill='x', padx=30, pady=4)
+        user_entry.pack(fill='x', padx=20, pady=(4, 14))
+
+        tk.Label(
+            dlg, text="Password",
+            font=('Segoe UI', 10, 'bold'),
+            bg=SURFACE, fg=MUTED
+        ).pack(anchor='w', padx=20)
+
+        pass_frame = tk.Frame(dlg, bg=SURFACE)
+        pass_frame.pack(fill='x', padx=20, pady=(4, 14))
+
+        pass_entry = tk.Entry(
+            pass_frame, show='•', font=('Segoe UI', 11),
+            bg='#1a1a1a', fg=WHITE,
+            insertbackground=WHITE,
+            relief='flat', highlightthickness=0, bd=0
+        )
+        pass_entry.pack(side='left', fill='x', expand=True)
+
+        show_pw = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            pass_frame, text="Show",
+            variable=show_pw,
+            bg=SURFACE, fg=MUTED,
+            activebackground=SURFACE, activeforeground=MUTED,
+            selectcolor=SURFACE,
+            font=('Segoe UI', 9),
+            command=lambda: pass_entry.config(
+                show='' if show_pw.get() else '•'
+            )
+        ).pack(side='right', padx=(8, 0))
 
         def do_create() -> None:
             u = user_entry.get()
@@ -1122,11 +1292,6 @@ class YouTubeStreamApp:
                 dlg.destroy()
             else:
                 messagebox.showerror("Error", msg)
-
-        tk.Button(
-            dlg, text="Create", command=do_create,
-            bg='#4caf50', fg=WHITE, font=('Segoe UI', 11, 'bold')
-        ).pack(pady=20, padx=40)
 
         dlg.bind('<Return>', lambda e: do_create())
 
