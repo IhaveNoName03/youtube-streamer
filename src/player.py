@@ -175,21 +175,14 @@ class PlaybackController:
             self.container.after(100, lambda: self.load(url, title))
             return
         
-        # Create mpv player
+        # Create mpv player (only use options validated with mpv v0.41.0 + python-mpv 1.0.8)
         try:
             self.player = mpv.MPV(
                 wid=str(window_id),
-                ytdl=True,
-                ytdl_hook_enabled=True,
                 keep_open=False,
                 pause=False,
                 idle=False,
                 force_window=True,
-                no_terminal=True,
-                video=True,
-                audio=True,
-                cache=30,
-                demuxer_max_bytes=1024*1024*1024,  # 1GB cache
             )
             
             # Bind events
