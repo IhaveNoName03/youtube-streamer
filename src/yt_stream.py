@@ -8,6 +8,7 @@ Ad-free playback via embedded mpv
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import subprocess
+import queue
 import threading
 import json
 import os
@@ -209,6 +210,9 @@ class YouTubeStreamApp:
         self.root.geometry("1400x900")
         self.root.configure(bg='#181818')
 
+        self.auth_frame = None  # auth UI frame (set in show_login)
+        self.overlay = None      # overlay widget (set in show_login)
+        self._trend_queue = queue.Queue()  # thread-safe queue for trending loads
         self.auth = UserAuth()
         self.current_videos: List[Dict] = []
         self.server = None
@@ -419,12 +423,13 @@ class YouTubeStreamApp:
         if not self.current_videos:
             self.status.config(text="Loading trending videos...")
             threading.Thread(target=self._load_trending, daemon=True).start()
+            self.root.after(100, self._process_trend_queue)
         else:
             self.render_grid()
             self.status.config(text=f"Found {len(self.current_videos)} videos")
 
     def _load_trending(self) -> None:
-        """Load trending videos from server"""
+        """Load trending videos from server (thread-safe via queue)"""
         try:
             resp = requests.get(
                 f'{SERVER_URL}/api/search',
@@ -432,15 +437,40 @@ class YouTubeStreamApp:
             )
             data = resp.json()
             videos = data.get('videos', [])
-            self.root.after(0, lambda: self._on_trending_loaded(videos))
+            self._trend_queue.put(videos)
         except Exception as e:
-            self.root.after(0, lambda: self.status.config(text=f"Trending error: {e}"))
+            self._trend_queue.put(('error', str(e)))
+            # Fallback: try popular search
+            try:
+                resp = requests.get(
+                    f'{SERVER_URL}/api/search',
+                    params={'q': 'music'}, timeout=10
+                )
+                data = resp.json()
+                videos = data.get('videos', [])
+                self._trend_queue.put(videos)
+            except Exception as e2:
+                self._trend_queue.put(('error', str(e2)))
 
     def _on_trending_loaded(self, videos: List[Dict]) -> None:
         """Handle trending videos loaded"""
         self.current_videos = videos
         self.render_grid()
         self.status.config(text=f"Found {len(videos)} trending videos")
+
+    def _process_trend_queue(self) -> None:
+        """Poll trend queue for async results (call from event loop)"""
+        try:
+            while True:
+                item = self._trend_queue.get_nowait()
+                if isinstance(item, tuple) and item[0] == 'error':
+                    self.status.config(text=f"Couldn't load trending videos")
+                else:
+                    self._on_trending_loaded(item)
+                self._trend_queue.task_done()
+        except queue.Empty:
+            pass
+        self.root.after(100, self._process_trend_queue)
 
     def render_grid(self) -> None:
         """Render video grid with thumbnails and titles"""
@@ -798,6 +828,7 @@ class YouTubeStreamApp:
         if not self.current_videos:
             self.status.config(text="Loading trending videos...")
             threading.Thread(target=self._load_trending, daemon=True).start()
+            self.root.after(100, self._process_trend_queue)
         else:
             self.render_grid()
             self.status.config(text=f"Found {len(self.current_videos)} videos")
