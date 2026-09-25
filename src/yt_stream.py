@@ -13,6 +13,8 @@ import threading
 import json
 import os
 import sys
+import requests
+from pathlib import Path
 import hashlib
 from pathlib import Path
 from datetime import datetime
@@ -213,6 +215,8 @@ class YouTubeStreamApp:
         self.auth_frame = None  # auth UI frame (set in show_login)
         self.overlay = None      # overlay widget (set in show_login)
         self._trend_queue = queue.Queue()  # thread-safe queue for trending loads
+        self._search_queue = queue.Queue()  # thread-safe queue for search results
+        self._pending_search_query = None  # last search query waiting for results
         self.auth = UserAuth()
         self.current_videos: List[Dict] = []
         self.server = None
@@ -397,9 +401,12 @@ class YouTubeStreamApp:
             q = cat
         self.current_videos = []
         self.status.config(text=f"Searching {cat}: {query or cat}...")
-        threading.Thread(target=self._do_search, args=(q,), daemon=True).start()
+        self._pending_search_query = q
+        self._search_queue = queue.Queue()
+        self.root.after(100, self._process_search_queue)
+        threading.Thread(target=self._do_search, args=(q, self._search_queue), daemon=True).start()
 
-    def _do_search(self, query: str) -> None:
+    def _do_search(self, query: str, result_queue: queue.Queue) -> None:
         """Perform search via Flask API"""
         try:
             resp = requests.get(
@@ -408,10 +415,9 @@ class YouTubeStreamApp:
             )
             data = resp.json()
             videos = data.get('videos', [])
-
-            self.root.after(0, lambda: self._render_search_results(videos, query))
+            result_queue.put(videos)
         except Exception as e:
-            self.root.after(0, lambda: self.status.config(text=f"Error: {e}"))
+            result_queue.put(('error', str(e)))
 
     def _render_search_results(self, videos: List[Dict], query: str) -> None:
         """Render search results in grid"""
@@ -421,12 +427,10 @@ class YouTubeStreamApp:
                 w.destroy()
         self.grid.pack(fill='both', expand=True)
         if not self.current_videos:
-            self.status.config(text="Loading trending videos...")
-            threading.Thread(target=self._load_trending, daemon=True).start()
-            self.root.after(100, self._process_trend_queue)
+            self.status.config(text="No results for: " + query)
         else:
             self.render_grid()
-            self.status.config(text=f"Found {len(self.current_videos)} videos")
+            self.status.config(text=f"Found {len(self.current_videos)} videos for '{query}'")
 
     def _load_trending(self) -> None:
         """Load trending videos from server (thread-safe via queue)"""
@@ -471,6 +475,24 @@ class YouTubeStreamApp:
         except queue.Empty:
             pass
         self.root.after(100, self._process_trend_queue)
+
+    def _process_search_queue(self) -> None:
+        """Poll search queue for async results (call from event loop)"""
+        try:
+            while True:
+                item = self._search_queue.get_nowait()
+                if isinstance(item, tuple) and item[0] == 'error':
+                    self.status.config(text=f"Search error: {item[1][:60]}")
+                elif self._pending_search_query is not None:
+                    self._render_search_results(item, self._pending_search_query)
+                    self._pending_search_query = None
+                else:
+                    # Search result with no query context — render anyway
+                    self._render_search_results(item, "")
+                self._search_queue.task_done()
+        except queue.Empty:
+            pass
+        self.root.after(100, self._process_search_queue)
 
     def render_grid(self) -> None:
         """Render video grid with thumbnails and titles"""
