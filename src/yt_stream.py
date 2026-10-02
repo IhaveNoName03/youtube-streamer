@@ -38,6 +38,8 @@ try:
 except ImportError:
     HAS_PIL = False
 
+from presenters import card_meta, card_thumbnail, card_title, format_duration
+
 try:
     from player import PlaybackController
     HAS_PLAYER = True
@@ -555,9 +557,10 @@ class YouTubeStreamApp:
             thumb.pack()
             thumb.grid_propagate(False)
 
-            if HAS_PIL and v.get('thumbnail'):
+            thumb_url = card_thumbnail(v)
+            if HAS_PIL and thumb_url:
                 try:
-                    resp = requests.get(v['thumbnail'], timeout=3)
+                    resp = requests.get(thumb_url, timeout=3)
                     img = Image.open(io.BytesIO(resp.content)).resize((320, 180))
                     tk_img = ImageTk.PhotoImage(img)
                     lbl = tk.Label(thumb, image=tk_img, bg=THUMB)
@@ -566,24 +569,14 @@ class YouTubeStreamApp:
                 except Exception:
                     pass
 
-            # Duration badge if available
-            duration = v.get('duration')
-            dur_str = f" {self._fmt(duration)}" if duration else ""
-
             tk.Label(
-                card, text=v.get('title', 'Unknown')[:80] + dur_str,
+                card, text=card_title(v),
                 font=BODY_FONT, bg=SURFACE, fg=WHITE,
                 wraplength=300
             ).pack(padx=12, pady=6)
 
-            views = v.get('view_count', 0)
-            vs = (
-                f"{views/1e6:.1f}M" if views >= 1e6
-                else f"{views/1e3:.1f}K" if views >= 1e3
-                else str(views)
-            )
             tk.Label(
-                card, text=f"{v.get('channel', 'Unknown')} • {vs} views",
+                card, text=card_meta(v),
                 font=META_FONT, bg=SURFACE, fg=MUTED
             ).pack(padx=12, pady=(0, 12))
 
@@ -790,13 +783,15 @@ class YouTubeStreamApp:
             self.current_video = None
 
     def _fmt(self, seconds: float) -> str:
-        """Format seconds as H:MM:SS or M:SS"""
-        if seconds < 0:
+        """Format seconds as H:MM:SS or M:SS.
+
+        Delegates to presenters.format_duration so the player clock and the
+        duration badge can never drift apart; that helper returns '' for
+        unknown/zero, which the clock renders as 0:00.
+        """
+        if seconds is None or seconds < 0:
             return "0:00"
-        s = int(seconds)
-        m, s = divmod(s, 60)
-        h, m = divmod(m, 60)
-        return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+        return format_duration(seconds) or "0:00"
 
     def add_to_playlist(self) -> None:
         """Add current video to a playlist"""
