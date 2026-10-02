@@ -700,6 +700,34 @@ class YouTubeStreamApp:
             relief='flat', cursor='hand2'
         ).pack(side='right', padx=(4, 8))
 
+    def _resolve_streams(self, video_id: str) -> tuple:
+        """Ask the local API for direct video/audio URLs.
+
+        mpv cannot resolve YouTube watch URLs here: resolving them needs
+        ytdl_hook.lua, which this system's mpv package does not ship. The
+        Flask side already runs yt-dlp, so reuse it rather than depending on
+        mpv's script.
+
+        Returns (video_url, audio_url); audio_url is None when the source is
+        already muxed.
+        """
+        try:
+            resp = requests.get(f'{SERVER_URL}/api/video/{video_id}', timeout=30)
+            data = resp.json()
+        except Exception as exc:
+            log_player.exception('stream resolution request failed for %s', video_id)
+            return None, None
+        if 'error' in data:
+            log_player.error('stream resolution error for %s: %s',
+                             video_id, data['error'])
+            return None, None
+        v_url = data.get('url')
+        a_url = data.get('audio_url')
+        log_player.info('resolved %s -> video=%sp%s audio=%s', video_id,
+                        data.get('height'), data.get('ext'),
+                        'yes' if a_url else 'no (muxed)')
+        return v_url, a_url
+
     def init_mpv(self, video: Dict) -> None:
         """Initialize mpv player after UI is ready"""
         if not HAS_PLAYER:
@@ -724,66 +752,111 @@ class YouTubeStreamApp:
                 on_close=self.close_player,
                 build_controls=False,
             )
-            self.player.load(
-                f'https://www.youtube.com/watch?v={video.get("id")}',
-                video.get('title', 'Unknown')
-            )
+            log_player.info('init_mpv: resolving streams for %s', video.get('id'))
+            v_url, a_url = self._resolve_streams(video.get('id'))
+            if not v_url:
+                log_player.error('could not resolve any stream for %s',
+                                 video.get('id'))
+                messagebox.showerror(
+                    "Playback Error",
+                    "Could not get a playable stream for this video."
+                )
+                self.close_player()
+                return
+            self.player.load(v_url, video.get('title', 'Unknown'), a_url)
+            # load() calls on_close() (which nulls self.player) when it fails,
+            # so it must be re-checked before dereferencing.
+            if not self.player or not getattr(self.player, 'player', None):
+                log_player.error('mpv did not start for %s — load() failed',
+                                 video.get('id'))
+                return
+            log_player.info('mpv started, binding events')
             self.player.player.bind('playback-time', self._update_time)
             self.player.player.bind('duration', self._update_duration)
             self.player.player.bind('pause', self._update_play_state)
             self.player.player.bind('idle', self._on_idle)
 
         except Exception as e:
+            log_player.exception('init_mpv FAILED for %s', video.get('id'))
             messagebox.showerror("Playback Error", str(e))
             self.close_player()
 
     def _update_time(self, event: Any, value: float) -> None:
-        if self.player and hasattr(self.player, 'player') and \
-           self.player.player and self.player.player.duration > 0:
-            self.seek_var.set(value / self.player.player.duration * 100)
-            self.time_lbl.config(
-                text=f"{self._fmt(value)} / {self._fmt(self.player.player.duration)}"
-            )
+        # Property observers fire once with None before the file is parsed, so
+        # both the reported value and the duration can be None here.
+        duration = None
+        if self.player and getattr(self.player, 'player', None):
+            try:
+                duration = self.player.player.duration
+            except Exception:
+                duration = None
+        if value is None or not duration or duration <= 0:
+            return
+        self.seek_var.set(value / duration * 100)
+        self.time_lbl.config(
+            text=f"{self._fmt(value)} / {self._fmt(duration)}"
+        )
 
     def _update_duration(self, event: Any, value: float) -> None:
-        if value > 0:
+        # observe_property delivers None until the file is parsed.
+        if value and value > 0:
             self.time_lbl.config(text=f"0:00 / {self._fmt(value)}")
 
     def _update_play_state(self, event: Any, value: bool) -> None:
+        if value is None:
+            return
         self.play_btn.config(text="▶" if value else "⏸")
 
     def _on_idle(self, event: Any, value: bool) -> None:
         if value:
             self.root.after(500, self.close_player)
 
+    def _mpv(self):
+        """The live mpv handle, or None.
+
+        self.player is the PlaybackController and .player is the mpv handle;
+        the handle is None until load() succeeds, so every control callback has
+        to re-check it rather than trusting `if self.player`.
+        """
+        ctrl = getattr(self, 'player', None)
+        if not ctrl:
+            return None
+        handle = getattr(ctrl, 'player', None)
+        return handle or None
+
     def _on_seek_drag(self, value: str) -> None:
-        if self.player and self.player.player.duration > 0:
-            self.player.player.seek = \
-                float(value) / 100 * self.player.player.duration
+        m = self._mpv()
+        if m and (m.duration or 0) > 0:
+            m.seek = float(value) / 100 * m.duration
 
     def _on_volume_change(self, value: str) -> None:
-        if self.player:
-            self.player.player.volume = float(value) / 100
+        m = self._mpv()
+        if m:
+            m.volume = float(value) / 100
 
     def _on_speed_change(self, value: str) -> None:
-        if self.player:
-            self.player.player.playback_rate = float(value.replace('x', ''))
+        m = self._mpv()
+        if m:
+            m.playback_rate = float(value.replace('x', ''))
 
     def toggle_play_pause(self) -> None:
         """Toggle play/pause state"""
-        if self.player:
-            self.player.player.pause = not self.player.player.pause
+        m = self._mpv()
+        if m:
+            m.pause = not m.pause
 
     def toggle_fullscreen(self) -> None:
         """Toggle fullscreen mode"""
-        if self.player:
-            self.player.player.fullscreen = not self.player.player.fullscreen
+        m = self._mpv()
+        if m:
+            m.fullscreen = not m.fullscreen
 
     def seek(self, seconds: float) -> None:
         """Seek video by seconds"""
-        if self.player and self.player.player.duration > 0:
-            new = self.player.player.playback_time + seconds
-            self.player.player.seek = max(0, min(new, self.player.player.duration))
+        m = self._mpv()
+        if m and (m.duration or 0) > 0:
+            new = (m.playback_time or 0) + seconds
+            m.seek = max(0, min(new, m.duration))
 
     def close_player(self) -> None:
         """Close current player and return to browse"""

@@ -15,6 +15,80 @@ import mpv
 from typing import Optional, Callable, Any
 
 
+# Events (as opposed to properties) arrive via the single event_callback slot,
+# so they need dispatching by hand.
+_EVENT_HANDLERS: dict = {}
+
+
+class MpvHandle:
+    """Compatibility wrapper around mpv.MPV for python-mpv 1.x.
+
+    python-mpv 1.0 removed 0.x's ``MPV.bind(name, callback)`` and its
+    ``bind_event`` twin. Properties still work as plain attribute get/set
+    (verified: pause, volume, duration, playback-time, fullscreen, filename),
+    so the ONLY gap is event/property subscriptions.
+
+    This wrapper restores ``bind(name, callback)`` with the 0.x
+    ``callback(event, value)`` signature:
+      * property names  -> observe_property
+      * event names     -> a single event_callback dispatcher
+
+    Keeping the surface identical means yt_stream.py needs no changes.
+    """
+
+    def __init__(self, **options):
+        self._mpv = mpv.MPV(**options)
+        self._property_handlers: dict = {}
+        self._event_handlers: dict = {}
+        self._mpv.event_callback = self._dispatch_event
+        # mirror the 1.x attribute surface (play, quit, command, ...)
+        self.__dict__['_exposed'] = True
+
+    # --- 0.x-compatible bind() -------------------------------------------
+    def bind(self, name: str, callback: Callable) -> None:
+        """Subscribe to a property or event. 0.x signature."""
+        if name in _EVENT_NAMES:
+            self._event_handlers[name] = callback
+            return
+
+        def _handler(_prop, value):
+            try:
+                callback(name, value)
+            except Exception:
+                import logging
+                logging.getLogger('youtube_stream.player').exception(
+                    'handler for %r raised', name)
+
+        self._property_handlers[name] = callback
+        self._mpv.observe_property(name, _handler)
+
+    def _dispatch_event(self, name, data) -> None:
+        cb = self._event_handlers.get(name)
+        if cb:
+            try:
+                cb(name, data)
+            except Exception:
+                import logging
+                logging.getLogger('youtube_stream.player').exception(
+                    'event handler for %r raised', name)
+
+    # --- delegate everything else to the real handle ----------------------
+    def __getattr__(self, item):
+        return getattr(self._mpv, item)
+
+    def __setattr__(self, key, value):
+        if key in ('_mpv', '_property_handlers', '_event_handlers', '_exposed'):
+            object.__setattr__(self, key, value)
+        else:
+            setattr(self._mpv, key, value)
+
+
+# mpv event names (as opposed to properties) that the app subscribes to.
+_EVENT_NAMES = {'idle', 'end-file', 'shutdown', 'seeked', 'dequeue',
+                'video-reconfig', 'audio-reconfig', 'file-loaded',
+                'playback-restart'}
+
+
 # Palette (matches yt_stream.py)
 SURFACE  = '#161616'
 ELEVATED = '#232323'
@@ -168,40 +242,52 @@ class PlaybackController:
         if self.player:
             self.player.playback_rate = speed
     
-    def load(self, url: str, title: Optional[str] = None) -> None:
+    def load(self, url: str, title: Optional[str] = None,
+             audio_url: Optional[str] = None) -> None:
         """
         Load a video for playback.
-        
+
         Args:
-            url: YouTube URL or direct video URL
+            url: a direct media URL, or a YouTube watch URL
             title: Display title for the video
+            audio_url: separate audio stream. YouTube serves DASH, so video and
+                audio are distinct URLs; mpv takes them as a
+                "video://…" + "audio://…" pair.
+
+        Note: mpv only resolves YouTube URLs when its ytdl_hook.lua script is
+        installed, which this system's mpv package does not ship. Callers must
+        therefore hand us direct stream URLs (see yt_stream._resolve_streams).
         """
         self.video_url = url
         self.video_title = title
-        
+
         # Destroy previous player
         if self.player:
             try:
                 self.player.quit()
             except Exception:
                 pass
-        
+
         # Get window ID for embedding
         self.container.update_idletasks()
         window_id = self.mpv_container.winfo_id()
-        
+
         if window_id == 0:
             # Widget not realized yet, delay
-            self.container.after(100, lambda: self.load(url, title))
+            self.container.after(100, lambda: self.load(url, title, audio_url))
             return
         
-        # Create mpv player (only use options validated with mpv v0.41.0 + python-mpv 1.0.8)
+        # Create mpv player.
+        # NOTE: do not pass `idle` here. On mpv 0.41 + python-mpv, setting
+        # idle=False shuts the core down during construction, so every
+        # subsequent call raises "libmpv core has been shutdown" and playback
+        # never starts. Verified by isolating each option: wid, keep_open,
+        # pause and force_window are all fine; idle is fatal.
         try:
-            self.player = mpv.MPV(
+            self.player = MpvHandle(
                 wid=str(window_id),
                 keep_open=False,
                 pause=False,
-                idle=False,
                 force_window=True,
             )
             
@@ -210,13 +296,32 @@ class PlaybackController:
             self.player.bind('duration', self._on_duration)
             self.player.bind('pause', self._on_pause)
             self.player.bind('idle', self._on_idle)
-            
-            # Start playback
-            self.player.play(url)
+
+            # Start playback. With DASH, video and audio are separate
+            # streams, and python-mpv 1.x's play() takes one filename.
+            #
+            # Verified against the live stream:
+            #   loadfile(video, replace) + loadfile(audio, append) -> NO AUDIO
+            #   play(video) + audio_add(audio)                  -> AAC AUDIO
+            # `append` queues a second *file*; it does not attach the audio
+            # track of an already-playing file.
+            #
+            # NB: plain URLs only. A "video://" / "audio://" track prefix
+            # silences playback here — verified: plain plays, prefixed does not.
+            if audio_url:
+                self.player.play(url)
+                try:
+                    self.player.audio_add(audio_url)
+                except Exception:
+                    import logging
+                    logging.getLogger('youtube_stream.player').exception(
+                        'audio_add failed for %s', url[:60])
+            else:
+                self.player.play(url)
             if self.build_controls:
                 self.play_btn.config(text="⏸")
                 self.seek_bar.configure(state='normal')
-            
+
         except Exception as e:
             print(f"Playback error: {e}")
             if self.on_close:
@@ -224,6 +329,9 @@ class PlaybackController:
     
     def _on_playback_time(self, event, value):
         """Update seek bar and time display"""
+        # observe_property fires once with None before the file is loaded.
+        if value is None:
+            return
         if self.player and self.player.duration > 0 and self.build_controls:
             pct = (value / self.player.duration) * 100
             self.seek_bar.set(pct)
@@ -232,7 +340,8 @@ class PlaybackController:
 
     def _on_duration(self, event, value):
         """Update time display when duration is known"""
-        if value > 0 and self.build_controls:
+        # observe_property delivers None until the file is parsed.
+        if value and value > 0 and self.build_controls:
             self.time_label.config(text=f"0:00 / {self._format_time(value)}")
 
     def _on_pause(self, event, value):

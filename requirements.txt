@@ -3,4 +3,7 @@ flask>=2.0.0
 yt-dlp>=2023.01.01
 requests>=2.28.0
 pillow>=9.0.0
-python-mpv>=0.0.7
+# 1.x is required: 0.x targets libmpv 1.x, and this system's mpv ships
+# libmpv 2.x. The API also changed (bind() removed; properties are read via
+# .properties), which src/player.py's MpvHandle adapts.
+python-mpv>=1.0.8,<2.0.0
