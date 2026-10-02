@@ -10,8 +10,8 @@ import yt_dlp
 import threading
 from pathlib import Path
 
-# Get app directory (where this script is located)
-APP_DIR = Path(__file__).parent.parent.resolve() if __file__ != __file__ else Path.cwd()
+# Anchor to the project root regardless of the caller's cwd.
+APP_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = APP_DIR / "data"
 COOKIES_FILE = DATA_DIR / "cookies" / "youtube_cookies.txt"
 
@@ -22,17 +22,29 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 
 
-def get_ydl_opts():
-    """Get yt-dlp options for search (metadata only, no format resolution)"""
+def get_ydl_opts(for_video=False):
+    """Get yt-dlp options.
+
+    Search uses extract_flat for speed, but flat extraction omits `thumbnail`
+    (verified: every entry comes back with thumbnail=None), which leaves the UI
+    with blank grey cards. So we synthesise the thumbnail URL from the video id
+    instead — i.ytimg.com serves it deterministically for every video.
+    """
     opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
-        'extract_flat': True,  # just metadata, no format info — fast
     }
+    if not for_video:
+        opts['extract_flat'] = True  # fast search: metadata only
     if COOKIES_FILE.exists():
         opts['cookies'] = str(COOKIES_FILE)
     return opts
+
+
+def thumbnail_for(video_id: str) -> str:
+    """Deterministic thumbnail URL for a YouTube video id."""
+    return f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg'
 
 
 @app.route('/')
@@ -62,9 +74,11 @@ def api_search():
                 videos.append({
                     'id': e['id'],
                     'title': e.get('title', 'Untitled'),
-                    'thumbnail': e.get('thumbnail', ''),
+                    'thumbnail': e.get('thumbnail') or thumbnail_for(e['id']),
                     'channel': e.get('uploader', 'Unknown'),
-                    'views': e.get('view_count', 0),
+                    # GUI (yt_stream.render_grid) reads 'view_count'; emit that name.
+                    'view_count': e.get('view_count') or 0,
+                    'duration': e.get('duration') or 0,
                 })
             result['videos'] = videos
         except Exception as exc:
@@ -84,31 +98,67 @@ def api_search():
 
 @app.route('/api/video/<video_id>')
 def api_video(video_id):
-    """Get direct video URL for playback"""
+    """Get direct stream URLs for playback.
+
+    YouTube serves adaptive (DASH) streams: video and audio are SEPARATE
+    URLs and no muxed/progressive format is offered. So we must return both,
+    otherwise playback is silent. Audio-only entries carry height=None, hence
+    the explicit `or 0` when comparing.
+    """
     url = f'https://www.youtube.com/watch?v={video_id}'
     try:
-        opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-        }
-        if COOKIES_FILE.exists():
-            opts['cookies'] = str(COOKIES_FILE)
+        opts = get_ydl_opts(for_video=True)
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        if 'formats' not in info:
+        formats = info.get('formats')
+        if not formats:
             return jsonify({'error': 'No formats available'}), 500
 
-        best = None
-        for f in info['formats']:
-            if f.get('url') and (f.get('acodec') != 'none' or f.get('vcodec') != 'none'):
-                if not best or f.get('height', 0) > best.get('height', 0):
-                    best = f
-        if not best:
-            return jsonify({'error': 'No usable format'}), 500
+        # Muxed (audio+video in one) is preferred when a server offers it.
+        muxed = [
+            f for f in formats
+            if f.get('url')
+            and f.get('acodec') not in (None, 'none')
+            and f.get('vcodec') not in (None, 'none')
+        ]
+        if muxed:
+            best = max(muxed, key=lambda f: f.get('height') or 0)
+            return jsonify({
+                'id': video_id,
+                'title': info.get('title'),
+                'url': best.get('url'),
+                'audio_url': None,          # already muxed
+                'duration': info.get('duration'),
+            })
 
-        return jsonify({'id': video_id, 'title': info.get('title'), 'url': best.get('url')})
+        # Adaptive: pick best video and best audio independently.
+        videos = [
+            f for f in formats
+            if f.get('url') and f.get('vcodec') not in (None, 'none') and f.get('height')
+        ]
+        audios = [
+            f for f in formats
+            if f.get('url') and f.get('acodec') not in (None, 'none')
+        ]
+        if not videos:
+            return jsonify({'error': 'No usable video format'}), 500
+
+        best_video = max(videos, key=lambda f: f.get('height') or 0)
+        payload = {
+            'id': video_id,
+            'title': info.get('title'),
+            'url': best_video.get('url'),
+            'ext': best_video.get('ext'),
+            'height': best_video.get('height'),
+            'duration': info.get('duration'),
+        }
+        if audios:
+            best_audio = max(
+                audios, key=lambda f: f.get('abr') or f.get('tbr') or 0
+            )
+            payload['audio_url'] = best_audio.get('url')
+        return jsonify(payload)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -118,11 +168,16 @@ def proxy(video_id):
     """Proxy endpoint — opens video player page"""
     import requests
     try:
-        resp = requests.get(f'http://127.0.0.1:5000/api/video/{video_id}', timeout=10)
+        resp = requests.get(f'http://127.0.0.1:5000/api/video/{video_id}', timeout=20)
         data = resp.json()
         if 'error' in data:
             return f'<h1>Error: {data["error"]}</h1>', 500
-        return render_template_string(PLAYER_TEMPLATE, video_url=data['url'])
+        return render_template_string(
+            PLAYER_TEMPLATE,
+            video_url=data['url'],
+            audio_url=data.get('audio_url'),
+            video_title=data.get('title') or '',
+        )
     except Exception as e:
         return f'<h1>Proxy error: {e}</h1>', 500
 
@@ -253,7 +308,7 @@ c.innerHTML='<div class="empty-state"><h3>No results</h3><p>Try a different sear
                 <div class="video-info">
                     <div class="video-title">${v.title}</div>
                     <div class="video-channel">${v.channel}</div>
-                    <div class="video-meta">${formatViews(v.views)} views</div>
+                    <div class="video-meta">${formatViews(v.view_count)} views</div>
                 </div>
             </div>`).join('');
         }
@@ -274,9 +329,65 @@ c.innerHTML='<div class="empty-state"><h3>No results</h3><p>Try a different sear
 PLAYER_TEMPLATE = """
 <!DOCTYPE html>
 <html>
-<head><style>body{margin:0;background:#000}video{width:100%;height:100vh;object-fit:contain}</style></head>
-<body><video id="vp" controls autoplay><source src="{{ video_url }}" type="video/mp4"></video></body>
-<script>document.getElementById('vp').src="{{ video_url }}";</script></html>
+<head>
+<meta charset="UTF-8">
+<title>{{ video_title }}</title>
+<style>
+  body{margin:0;background:#000;color:#f2f2f2;font-family:system-ui,sans-serif}
+  #stage{position:relative;width:100%;height:100vh}
+  video{width:100%;height:100%;object-fit:contain;background:#000}
+  #bar{position:absolute;left:0;right:0;bottom:0;padding:10px 14px;
+       background:linear-gradient(transparent,rgba(0,0,0,.85));display:flex;
+       gap:10px;align-items:center}
+  #play{background:#cc0000;color:#fff;border:0;padding:6px 14px;border-radius:4px;
+        cursor:pointer;font-size:14px}
+  #seek{flex:1}
+  #time{font-size:12px;color:#ddd;min-width:88px;text-align:right}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="vp" playsinline></video>
+  <!-- DASH: audio is a separate stream, played through a hidden audio element
+       and kept in sync with the video. -->
+  <audio id="ap" preload="auto"{% if not audio_url %} style="display:none"{% endif %}></audio>
+  <div id="bar">
+    <button id="play">Pause</button>
+    <input id="seek" type="range" min="0" max="1000" value="0">
+    <span id="time">0:00 / 0:00</span>
+  </div>
+</div>
+<script>
+var vp=document.getElementById('vp'), ap=document.getElementById('ap');
+var VIDEO_URL={{ video_url|tojson }};
+var AUDIO_URL={{ audio_url|tojson }};
+vp.src=VIDEO_URL;
+if(AUDIO_URL){ ap.src=AUDIO_URL; }
+
+function fmt(s){s=Math.max(0,s|0);var m=(s/60)|0,x=s%60;
+  return m+':'+(x<10?'0':'')+x;}
+
+// Keep the audio element locked to the video clock (DASH has no muxed stream).
+function sync(){ if(AUDIO_URL && ap.readyState>0) ap.currentTime=vp.currentTime; }
+vp.addEventListener('play',function(){ if(AUDIO_URL)ap.play(); });
+vp.addEventListener('pause',function(){ if(AUDIO_URL)ap.pause(); });
+vp.addEventListener('seeking',sync);
+vp.addEventListener('timeupdate',sync);
+setInterval(sync,1000);
+
+var seek=document.getElementById('seek'), time=document.getElementById('time');
+vp.addEventListener('timeupdate',function(){
+  if(vp.duration){ seek.value=vp.currentTime/vp.duration*1000;
+    time.textContent=fmt(vp.currentTime)+' / '+fmt(vp.duration); }
+});
+seek.addEventListener('input',function(){ if(vp.duration) vp.currentTime=seek.value/1000*vp.duration; });
+document.getElementById('play').addEventListener('click',function(){
+  if(vp.paused){ vp.play(); this.textContent='Pause'; }
+  else { vp.pause(); this.textContent='Play'; }
+});
+</script>
+</body>
+</html>
 """
 
 if __name__ == '__main__':

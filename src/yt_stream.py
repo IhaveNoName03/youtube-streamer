@@ -217,6 +217,8 @@ class YouTubeStreamApp:
         self._trend_queue = queue.Queue()  # thread-safe queue for trending loads
         self._search_queue = queue.Queue()  # thread-safe queue for search results
         self._pending_search_query = None  # last search query waiting for results
+        self._search_poller_running = False  # guards against poller multiplication
+        self._trend_poller_running = False
         self.auth = UserAuth()
         self.current_videos: List[Dict] = []
         self.server = None
@@ -271,7 +273,6 @@ class YouTubeStreamApp:
         )
         self.search_entry.pack(side='left', fill='x', expand=True, padx=(0, 12))
         self.search_entry.bind('<Return>', lambda e: self.search())
-        self.search_entry.bind('<Return>', lambda e: self._search_category("All"))
 
         catInner = tk.Frame(search, bg=CANVAS)
         catInner.pack(side='right', padx=(4, 0), pady=2)
@@ -386,8 +387,30 @@ class YouTubeStreamApp:
 
         self.current_videos = []
         self.status.config(text=f"Searching: {query}...")
+        self._start_search(query)
 
-        threading.Thread(target=self._do_search, args=(query,), daemon=True).start()
+    def _start_search(self, q: str) -> None:
+        """Run a search in a worker thread and deliver results via the queue.
+
+        _do_search needs (query, result_queue); passing only the query killed
+        the worker with a TypeError and left the UI stuck on 'Searching...'.
+        """
+        self._pending_search_query = q
+        threading.Thread(
+            target=self._do_search, args=(q, self._search_queue), daemon=True
+        ).start()
+        self._ensure_search_poller()
+
+    def _ensure_search_poller(self) -> None:
+        """Start the queue poller at most once.
+
+        Scheduling a poller per search made them multiply: each self-rearms via
+        after(100, ...), so N searches left N pollers waking 10x a second.
+        """
+        if getattr(self, '_search_poller_running', False):
+            return
+        self._search_poller_running = True
+        self.root.after(100, self._process_search_queue)
 
     def _search_category(self, override_cat=None) -> None:
         """Search with optional category filter."""
@@ -399,12 +422,11 @@ class YouTubeStreamApp:
             q = f"{cat} {query}"
         else:
             q = cat
+        if not q:
+            return
         self.current_videos = []
         self.status.config(text=f"Searching {cat}: {query or cat}...")
-        self._pending_search_query = q
-        self._search_queue = queue.Queue()
-        self.root.after(100, self._process_search_queue)
-        threading.Thread(target=self._do_search, args=(q, self._search_queue), daemon=True).start()
+        self._start_search(q)
 
     def _do_search(self, query: str, result_queue: queue.Queue) -> None:
         """Perform search via Flask API"""
@@ -850,7 +872,9 @@ class YouTubeStreamApp:
         if not self.current_videos:
             self.status.config(text="Loading trending videos...")
             threading.Thread(target=self._load_trending, daemon=True).start()
-            self.root.after(100, self._process_trend_queue)
+            if not getattr(self, '_trend_poller_running', False):
+                self._trend_poller_running = True
+                self.root.after(100, self._process_trend_queue)
         else:
             self.render_grid()
             self.status.config(text=f"Found {len(self.current_videos)} videos")
