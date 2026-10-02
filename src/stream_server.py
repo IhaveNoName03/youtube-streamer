@@ -10,6 +10,11 @@ import yt_dlp
 import threading
 from pathlib import Path
 
+from logsetup import get_logger, setup_logging
+
+log = setup_logging('youtube_stream.server')
+log_req = get_logger('server.request')
+
 # Anchor to the project root regardless of the caller's cwd.
 APP_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = APP_DIR / "data"
@@ -89,10 +94,13 @@ def api_search():
     t.join(timeout=15)
 
     if t.is_alive():
+        log_req.warning('search TIMED OUT after 15s: %r', query)
         return jsonify({'videos': [], 'message': 'Search timed out'}), 200
 
     if 'error' in result:
+        log_req.error('search ERROR for %r: %s', query, result['error'])
         return jsonify(result), 500
+    log_req.info('search OK: %r -> %d videos', query, len(result['videos']))
     return jsonify(result)
 
 
@@ -145,6 +153,9 @@ def api_video(video_id):
             return jsonify({'error': 'No usable video format'}), 500
 
         best_video = max(videos, key=lambda f: f.get('height') or 0)
+        log_req.info('api_video %s: %d formats, video=%sp%s, audio=%s',
+                     video_id, len(formats), best_video.get('height'),
+                     best_video.get('ext'), 'yes' if audios else 'NO')
         payload = {
             'id': video_id,
             'title': info.get('title'),

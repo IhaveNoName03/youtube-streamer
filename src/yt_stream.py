@@ -39,6 +39,13 @@ except ImportError:
     HAS_PIL = False
 
 from presenters import card_meta, card_thumbnail, card_title, format_duration
+from logsetup import get_logger, setup_logging
+
+LOG = setup_logging()
+log_auth = get_logger('auth')
+log_search = get_logger('search')
+log_player = get_logger('player')
+log_ui = get_logger('ui')
 
 try:
     from player import PlaybackController
@@ -169,6 +176,8 @@ class UserAuth:
             'failed_attempts': 0
         }
         self.save_users()
+        log_auth.info('account created: user=%r (users=%s)',
+                      username, sorted(self.users))
         return True, "User created successfully"
 
     def _validate_password(self, password: str) -> bool:
@@ -177,18 +186,27 @@ class UserAuth:
 
     def authenticate(self, username: str, password: str) -> bool:
         """Authenticate user with password"""
+        log_auth.info('auth attempt: user=%r', username)
         if username not in self.users:
+            known = sorted(self.users)
+            log_auth.warning('login FAILED: unknown user=%r (known: %s)',
+                             username, known)
             return False
         user = self.users[username]
         if user.get('failed_attempts', 0) >= 5:
+            log_auth.warning('login BLOCKED: account %r locked after %d failures',
+                             username, user.get('failed_attempts'))
             return False  # account locked
         if self.verify_password(user['password'], password):
             user['failed_attempts'] = 0
             self.save_users()
+            log_auth.info('login OK: user=%r', username)
             return True
         else:
             user['failed_attempts'] = user.get('failed_attempts', 0) + 1
             self.save_users()
+            log_auth.warning('login FAILED: bad password for user=%r (attempt %d/5)',
+                             username, user['failed_attempts'])
             return False
 
     def delete_user(self, username: str) -> bool:
@@ -443,15 +461,23 @@ class YouTubeStreamApp:
 
     def _do_search(self, query: str, result_queue: queue.Queue) -> None:
         """Perform search via Flask API"""
+        log_search.info('search request: %r', query)
         try:
             resp = requests.get(
                 f'{SERVER_URL}/api/search',
                 params={'q': query}, timeout=10
             )
+            log_search.info('search HTTP %s for %r', resp.status_code, query)
             data = resp.json()
             videos = data.get('videos', [])
+            log_search.info('search returned %d videos for %r', len(videos), query)
+            if videos:
+                log_search.debug('first result: %s', videos[0])
             result_queue.put(videos)
         except Exception as e:
+            # This path used to be invisible: the thread died and the UI hung
+            # on 'Searching...' forever.
+            log_search.exception('search FAILED for %r', query)
             result_queue.put(('error', str(e)))
 
     def _render_search_results(self, videos: List[Dict], query: str) -> None:
@@ -1291,11 +1317,13 @@ class YouTubeStreamApp:
         pwd = self.password_entry.get()
 
         if self.auth.authenticate(uname, pwd):
+            log_ui.info('login accepted for %r, opening browse', uname)
             self.auth.current_user = uname
             self.overlay.destroy()
             self.status.config(text=f"Logged in: {uname}")
             self.show_browse()
         else:
+            log_ui.warning('login rejected for %r', uname)
             messagebox.showerror("Error", "Invalid credentials")
 
     def create_account(self) -> None:
