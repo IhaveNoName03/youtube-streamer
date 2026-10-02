@@ -24,17 +24,19 @@ Not included yet — run `python3 app.py` to see it.
 
 ## Install
 
-```bash
-# Install Python dependencies
-pip install flask yt-dlp requests pillow python-mpv
+Use a virtualenv. The app must run under an interpreter that has the
+dependencies — running bare `python3 app.py` on a system Python fails.
 
-# Make sure mpv is installed (system package)
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# mpv must also be installed (system package)
+# Arch: sudo pacman -S mpv
 # Debian/Ubuntu: sudo apt install mpv
 # Fedora: sudo dnf install mpv
-# Arch: sudo pacman -S mpv
 
-# Run
-python3 app.py
+.venv/bin/python app.py
 ```
 
 Or use the launcher:
@@ -42,6 +44,16 @@ Or use the launcher:
 ```bash
 ./start.sh
 ```
+
+## Accounts
+
+The app starts with **no accounts** — create one from the login screen on first
+run. There is deliberately no default account.
+
+If you want the old demo account (`testuser` / `testpass123`) for local
+experimentation, construct `UserAuth(create_demo_user=True)`. A shipped default
+credential is effectively an unauthenticated backdoor on any machine that isn't
+strictly localhost-only.
 
 ## Usage
 
@@ -121,10 +133,29 @@ Linux. Tested on Arch (CachyOS). mpv and tkinter are assumed available.
 Run the diagnostic to verify everything is wired up:
 
 ```bash
-python3 diagnostic.py
+.venv/bin/python diagnostic.py
 ```
 
 Expected: 14/14 checks pass.
+
+### Regression tests
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+`tests/test_bugs.py` locks in fixes for previously-found bugs. It replays real
+captured yt-dlp responses from `tests/fixtures/`, so it needs no network and
+runs in about two seconds. Tests that need a display are skipped automatically
+when Tk cannot open one.
+
+### Playback and DASH
+
+YouTube serves adaptive streams: video and audio are separate URLs and no muxed
+format is offered. `player.PlaybackController` therefore takes
+`build_controls=False` when embedded in the main window, since the app supplies
+its own control bar — otherwise two bars render for one video. The browser player
+at `/proxy/<id>` plays the audio stream through a synced `<audio>` element.
 
 ## Caveats
 

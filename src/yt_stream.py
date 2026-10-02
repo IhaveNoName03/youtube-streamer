@@ -13,20 +13,24 @@ import threading
 import json
 import os
 import sys
-import requests
 from pathlib import Path
 import hashlib
-from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import io
 
 try:
     import requests
-except ImportError:
-    subprocess.run([sys.executable, '-m', 'pip', 'install', 'requests', '-q'],
-                   check=True, stdout=subprocess.DEVNULL)
-    import requests
+except ImportError as _exc:  # pragma: no cover - environment problem
+    # Do NOT pip-install at import time: that masked a missing dependency as a
+    # confusing 1/14 diagnostic instead of a clear message, and it mutates the
+    # environment as a side effect of `import yt_stream`.
+    raise SystemExit(
+        "Missing dependency 'requests'.\n"
+        "Install the project's requirements first:\n"
+        "    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt\n"
+        f"(original error: {_exc})"
+    ) from _exc
 
 try:
     from PIL import Image, ImageTk
@@ -99,14 +103,21 @@ for d in [DATA_DIR, DATA_DIR / "cookies", DOWNLOADS_DIR]:
 class UserAuth:
     """Manage local user accounts with password hashing"""
 
-    def __init__(self) -> None:
+    def __init__(self, create_demo_user: bool = False) -> None:
+        """Args:
+            create_demo_user: seed a `testuser` account with a KNOWN password
+                when no users exist. Off by default — a shipped default
+                credential is an unauthenticated backdoor on any machine that
+                isn't localhost-only.
+        """
         self.users: Dict[str, Any] = {}
         self.current_user: Optional[str] = None
         self.load_users()
-        self._ensure_test_user()
+        if create_demo_user:
+            self._ensure_test_user()
 
     def _ensure_test_user(self) -> None:
-        """Create a test user if no users exist (for testing/demo)"""
+        """Create a test user if no users exist (opt-in, demo use only)"""
         if not self.users:
             ok, _ = self.create_user("testuser", "testpass123")
             if ok:
@@ -687,9 +698,12 @@ class YouTubeStreamApp:
             return
 
         try:
+            # yt_stream builds its own control bar in _init_player_ui(); asking
+            # for another one here rendered two stacked bars per video.
             self.player = PlaybackController(
                 self.player_canvas,
-                on_close=self.close_player
+                on_close=self.close_player,
+                build_controls=False,
             )
             self.player.load(
                 f'https://www.youtube.com/watch?v={video.get("id")}',

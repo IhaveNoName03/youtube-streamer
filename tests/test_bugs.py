@@ -16,6 +16,228 @@ FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "video_formats.json").read_text()
 )
 
+tk_module = pytest.importorskip("tkinter")
+
+
+# ---------------------------------------------------------------------------
+# BUG 8: two stacked control bars for one video
+# ---------------------------------------------------------------------------
+def _build_player_ui():
+    """Drive the app's real player UI and return (app, tk_root)."""
+    import queue as _q
+    import yt_stream
+
+    try:
+        root = tk_module.Tk()
+    except Exception as exc:  # headless
+        pytest.skip(f"no display: {exc}")
+    root.geometry("1000x700")
+
+    app = yt_stream.YouTubeStreamApp.__new__(yt_stream.YouTubeStreamApp)
+    app.root = root
+    app.status = tk_module.Label(root)
+    app.current_videos = []
+    app.search_history = []
+    app._search_queue = _q.Queue()
+    app._trend_queue = _q.Queue()
+    app._pending_search_query = None
+    app._search_poller_running = False
+    app._trend_poller_running = False
+    app.content_frame = tk_module.Frame(root, bg=yt_stream.CANVAS)
+    app.content_frame.pack(fill="both", expand=True)
+    app.grid = tk_module.Frame(app.content_frame)
+    # init_mpv() reports failures via a modal dialog, which would hang a test.
+    yt_stream.messagebox = type(
+        "MB", (), {"showerror": staticmethod(lambda *a, **k: None),
+                   "showinfo": staticmethod(lambda *a, **k: None),
+                   "askyesno": staticmethod(lambda *a, **k: False)}
+    )()
+    # init_mpv() reaches close_player() on playback failure, which navigates
+    # back to browse and writes history — irrelevant here and needs full app
+    # state, so stub it out.
+    app.show_browse = lambda: None
+    app.current_video = None
+    return app, root
+
+
+def _count_control_bars(widget):
+    """Count control-bar-height frames in the subtree, plus their buttons."""
+    bars, buttons = [], []
+
+    def walk(w):
+        for c in w.winfo_children():
+            if isinstance(c, tk_module.Button):
+                buttons.append(c.cget("text"))
+            if isinstance(c, tk_module.Frame) and c.winfo_reqheight() >= 40:
+                bars.append(c)
+            walk(c)
+
+    walk(widget)
+    return bars, buttons
+
+
+def test_player_renders_exactly_one_control_bar():
+    """One video must produce ONE control bar.
+
+    yt_stream._init_player_ui() builds its own chrome and then constructs a
+    PlaybackController, whose __init__ built a SECOND full control bar inside
+    the same canvas. The user saw two stacked bars, and both subscribed to the
+    same mpv events, so seeking/time updates ran twice per tick.
+
+    We intercept the controller yt_stream actually constructs. Counting the live
+    widget tree is unreliable here: when mpv can't bind its events the app tears
+    the player view down (destroying both bars) before a count could happen.
+    """
+    import player as player_mod
+    import yt_stream
+
+    app, root = _build_player_ui()
+    try:
+        app._init_player_ui({"id": "x", "title": "T", "channel": "C"})
+        bars_before, _ = _count_control_bars(app.content_frame)
+        assert len(bars_before) == 1, (
+            f"host UI should render exactly 1 control bar, got {len(bars_before)}"
+        )
+
+        built = []
+        real_cls = player_mod.PlaybackController
+
+        def spy(*args, **kwargs):
+            ctrl = real_cls(*args, **kwargs)
+            built.append(ctrl)
+            return ctrl
+
+        yt_stream.PlaybackController = spy
+        try:
+            app.init_mpv({"id": "x", "title": "T", "channel": "C"})
+            root.update()
+        finally:
+            yt_stream.PlaybackController = real_cls
+
+        assert built, "init_mpv never constructed a PlaybackController"
+        assert len(built) == 1, f"{len(built)} controllers built for one video"
+        assert built[0].build_controls is False, (
+            "yt_stream built a build_controls=True controller, which renders a "
+            "SECOND control bar inside the canvas the host already filled"
+        )
+        assert built[0].control_bar is None, (
+            "a second control bar was created inside the player canvas"
+        )
+    finally:
+        root.destroy()
+
+
+def test_embedded_controller_does_not_build_its_own_bar():
+    """PlaybackController must honour build_controls=False.
+
+    Constructed directly with the flag, so the assertion is independent of
+    whether mpv happens to be usable in this environment.
+    """
+    from player import PlaybackController
+
+    root = tk_module.Tk()
+    try:
+        root.geometry("600x400")
+        host = tk_module.Frame(root, bg="black")
+        host.pack(fill="both", expand=True)
+        ctrl = PlaybackController(host, on_close=lambda: None,
+                                  build_controls=False)
+        root.update()
+        assert ctrl.control_bar is None, (
+            "build_controls=False still built a control_bar; "
+            "the host UI already provides one"
+        )
+        assert ctrl.mpv_container is not None, (
+            "build_controls=False must still create the mpv render target"
+        )
+    finally:
+        root.destroy()
+
+
+def test_standalone_controller_still_builds_its_controls():
+    """Player used on its own (no host chrome) must keep its built-in bar."""
+    from player import PlaybackController
+
+    root = tk_module.Tk()
+    try:
+        root.geometry("600x400")
+        host = tk_module.Frame(root, bg="black")
+        host.pack(fill="both", expand=True)
+        ctrl = PlaybackController(host, on_close=lambda: None)
+        root.update()
+        assert ctrl.control_bar is not None, (
+            "standalone PlaybackController lost its control bar — the default "
+            "build_controls=True path must be preserved"
+        )
+    finally:
+        root.destroy()
+
+
+# ---------------------------------------------------------------------------
+# BUG 10: close() <-> on_close() mutual recursion
+# ---------------------------------------------------------------------------
+def test_close_does_not_recurse_through_on_close():
+    """close() calls on_close(); the host's on_close calls close() straight back.
+
+    yt_stream.close_player() does `self.player.close()`, so any playback failure
+    recursed until RecursionError. The controller must not re-enter.
+    """
+    from player import PlaybackController
+
+    root = tk_module.Tk()
+    try:
+        root.geometry("400x300")
+        host = tk_module.Frame(root, bg="black")
+        host.pack(fill="both", expand=True)
+
+        calls = []
+
+        def on_close():
+            calls.append(1)
+            # Mirror the host: close the controller again, like yt_stream does.
+            if ctrl.player is not None:
+                ctrl.close()
+
+        ctrl = PlaybackController(host, on_close=on_close)
+        root.update()
+
+        ctrl.close()  # must terminate
+        assert len(calls) == 1, (
+            f"on_close fired {len(calls)} times for a single close() — "
+            f"close() and on_close() recurse"
+        )
+    finally:
+        root.destroy()
+
+
+# ---------------------------------------------------------------------------
+# BUG 11: shipped default credential
+# ---------------------------------------------------------------------------
+def test_no_demo_account_is_created_by_default(tmp_path, monkeypatch):
+    """UserAuth must not silently create testuser/testpass123 on first run."""
+    import yt_stream
+
+    monkeypatch.setattr(yt_stream, "USERS_FILE", tmp_path / "users.json")
+    auth = yt_stream.UserAuth()
+
+    assert "testuser" not in auth.users, (
+        "a default account with a KNOWN password was created on startup — "
+        "anyone who can reach the app can log straight in"
+    )
+    assert not (tmp_path / "users.json").exists(), (
+        "users.json was written just to seed a demo account"
+    )
+
+
+def test_demo_account_still_available_explicitly(tmp_path, monkeypatch):
+    """Opt-in demo seeding must keep working for local experimentation."""
+    import yt_stream
+
+    monkeypatch.setattr(yt_stream, "USERS_FILE", tmp_path / "users.json")
+    auth = yt_stream.UserAuth(create_demo_user=True)
+    assert "testuser" in auth.users, "opt-in demo seeding regressed"
+    assert auth.authenticate("testuser", "testpass123")
+
 
 # ---------------------------------------------------------------------------
 # BUG 1: /api/video 500s — format selector compares None heights

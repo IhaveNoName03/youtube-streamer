@@ -24,16 +24,25 @@ ACCENT   = '#cc0000'
 
 
 class PlaybackController:
-    """Manages mpv playback with full UI controls"""
-    
-    def __init__(self, container: tk.Widget, on_close: Optional[Callable] = None):
+    """Manages mpv playback, optionally with its own UI controls.
+
+    Set `build_controls=False` when embedding into a host UI that already
+    provides a control bar (yt_stream does this). Without it you get two
+    stacked control bars for a single video.
+    """
+
+    def __init__(self, container: tk.Widget, on_close: Optional[Callable] = None,
+                 build_controls: bool = True):
         """
         Args:
             container: Tkinter widget to embed mpv into
             on_close: function to call when player should close
+            build_controls: create the built-in control bar. False when the
+                host UI supplies its own.
         """
         self.container = container
         self.on_close = on_close
+        self.build_controls = build_controls
         self.player: Optional[Any] = None
         self.video_url: Optional[str] = None
         self.video_title: Optional[str] = None
@@ -45,6 +54,17 @@ class PlaybackController:
         # Player container (for mpv to render into)
         self.mpv_container = tk.Frame(self.container, bg='black')
         self.mpv_container.pack(fill='both', expand=True)
+
+        if not self.build_controls:
+            # Host UI owns the chrome; expose the attributes it may bind to so
+            # callers get a consistent surface.
+            self.control_bar = None
+            self.play_btn = None
+            self.time_label = None
+            self.seek_bar = None
+            self.volume_slider = None
+            self.speed_var = None
+            return
 
         # Control bar at bottom
         self.control_bar = tk.Frame(self.container, bg=ELEVATED, height=50)
@@ -132,7 +152,7 @@ class PlaybackController:
     
     def _on_seek_change(self, value):
         """Handle seek bar drag"""
-        if self.player and self.player.duration > 0:
+        if self.player and self.player.duration > 0 and self.build_controls:
             pos = float(value) / 100 * self.player.duration
             self.player.seek = pos
     
@@ -193,8 +213,9 @@ class PlaybackController:
             
             # Start playback
             self.player.play(url)
-            self.play_btn.config(text="⏸")
-            self.seek_bar.configure(state='normal')
+            if self.build_controls:
+                self.play_btn.config(text="⏸")
+                self.seek_bar.configure(state='normal')
             
         except Exception as e:
             print(f"Playback error: {e}")
@@ -203,19 +224,21 @@ class PlaybackController:
     
     def _on_playback_time(self, event, value):
         """Update seek bar and time display"""
-        if self.player and self.player.duration > 0:
+        if self.player and self.player.duration > 0 and self.build_controls:
             pct = (value / self.player.duration) * 100
             self.seek_bar.set(pct)
             self.time_label.config(
                 text=f"{self._format_time(value)} / {self._format_time(self.player.duration)}")
-    
+
     def _on_duration(self, event, value):
         """Update time display when duration is known"""
-        if value > 0:
+        if value > 0 and self.build_controls:
             self.time_label.config(text=f"0:00 / {self._format_time(value)}")
-    
+
     def _on_pause(self, event, value):
         """Update play button icon"""
+        if not self.build_controls:
+            return
         if value:
             self.play_btn.config(text="▶")
         else:
@@ -247,7 +270,8 @@ class PlaybackController:
         vol = value / 100
         if self.player:
             self.player.volume = vol
-        self.volume_slider.set(value)
+        if self.build_controls:
+            self.volume_slider.set(value)
     
     def toggle_fullscreen(self):
         """Toggle fullscreen (mpv handles this)"""
@@ -258,19 +282,28 @@ class PlaybackController:
     
     def close(self):
         """Close playback and cleanup"""
-        if self.player:
-            try:
-                self.player.quit()
-            except Exception:
-                pass
-            self.player = None
-        
-        # Clear UI
-        for widget in self.container.winfo_children():
-            widget.destroy()
-        
-        if self.on_close:
-            self.on_close()
+        # Re-entrancy guard: close() calls on_close(), and the host's on_close
+        # handler (yt_stream.close_player) calls close() straight back. Without
+        # this, any load failure recursed until RecursionError.
+        if getattr(self, '_closing', False):
+            return
+        self._closing = True
+        try:
+            if self.player:
+                try:
+                    self.player.quit()
+                except Exception:
+                    pass
+                self.player = None
+
+            # Clear UI
+            for widget in self.container.winfo_children():
+                widget.destroy()
+
+            if self.on_close:
+                self.on_close()
+        finally:
+            self._closing = False
     
     def _format_time(self, seconds):
         """Format seconds as M:SS or H:MM:SS"""
