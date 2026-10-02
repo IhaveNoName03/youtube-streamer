@@ -46,6 +46,15 @@ def _build_player_ui():
     app.content_frame = tk_module.Frame(root, bg=yt_stream.CANVAS)
     app.content_frame.pack(fill="both", expand=True)
     app.grid = tk_module.Frame(app.content_frame)
+    # The player lives in its own persistent container (the Now Playing tab).
+    app.player_frame = tk_module.Frame(app.content_frame, bg=yt_stream.CANVAS)
+    # play_video/close_player switch tabs, so the stub needs the tab registry.
+    # These live outside content_frame (as in the real app) so view switching
+    # never destroys them.
+    tab_stub = tk_module.Frame(root)
+    app.tabs = {"Browse": tk_module.Button(tab_stub),
+                "Now Playing": tk_module.Button(tab_stub)}
+    app.active_tab = "Browse"
     # init_mpv() reports failures via a modal dialog, which would hang a test.
     yt_stream.messagebox = type(
         "MB", (), {"showerror": staticmethod(lambda *a, **k: None),

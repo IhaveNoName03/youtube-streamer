@@ -336,7 +336,8 @@ class YouTubeStreamApp:
         for i, (name, cmd) in enumerate([
             ("Browse", self.show_browse),
             ("History", self.show_history),
-            ("Playlists", self.show_playlists)
+            ("Playlists", self.show_playlists),
+            ("Now Playing", self.show_now_playing)
         ]):
             btn = tk.Button(
                 self.tab_frame, text=name, command=cmd,
@@ -352,6 +353,13 @@ class YouTubeStreamApp:
 
         self.grid = tk.Frame(self.content_frame, bg=CANVAS)
         self.grid.pack(fill='both', expand=True)
+
+        # Persistent host for the player. Never destroyed by the other views,
+        # so playback survives tab switches instead of evicting the grid.
+        self.player_frame = tk.Frame(self.content_frame, bg=CANVAS)
+
+        self._highlight_tab('Browse')
+        self._set_tab_enabled('Now Playing', False)
 
         self.status = tk.Label(
             self.main, text="Ready",
@@ -484,7 +492,7 @@ class YouTubeStreamApp:
         """Render search results in grid"""
         self.current_videos = videos
         for w in self.content_frame.winfo_children():
-            if w is not self.grid:
+            if w is not self.grid and w is not self.player_frame:
                 w.destroy()
         self.grid.pack(fill='both', expand=True)
         if not self.current_videos:
@@ -612,13 +620,21 @@ class YouTubeStreamApp:
             self.grid.grid_columnconfigure(i, weight=1)
 
     def _init_player_ui(self, video: Dict) -> None:
-        """Initialize player UI elements"""
+        """Initialize player UI elements inside the persistent player tab."""
+        # The player lives in player_frame, never content_frame directly, so
+        # switching tabs cannot evict it.
+        host = self.player_frame
+
+        # Clear anything left from a previous video.
+        for w in host.winfo_children():
+            w.destroy()
+
         self.player_canvas = tk.Canvas(
-            self.content_frame, bg='black', bd=0, highlightthickness=0
+            host, bg='black', bd=0, highlightthickness=0
         )
         self.player_canvas.pack(fill='both', expand=True)
 
-        info_bar = tk.Frame(self.content_frame, bg=ELEVATED)
+        info_bar = tk.Frame(host, bg=ELEVATED)
         info_bar.pack(fill='x', pady=(0, 0))
         tk.Label(
             info_bar, text=video.get('title', 'Unknown'),
@@ -631,7 +647,7 @@ class YouTubeStreamApp:
             bg=ELEVATED, fg=MUTED
         ).pack(side='left', padx=(0, 10))
 
-        self.control_bar = tk.Frame(self.content_frame, bg=ELEVATED, height=46)
+        self.control_bar = tk.Frame(host, bg=ELEVATED, height=46)
         self.control_bar.pack(fill='x')
         self.control_bar.pack_propagate(False)
 
@@ -865,8 +881,12 @@ class YouTubeStreamApp:
             self.player = None
 
         for w in self.content_frame.winfo_children():
-            if w is not self.grid:
+            if w is not self.grid and w is not self.player_frame:
                 w.destroy()
+        for w in self.player_frame.winfo_children():
+            w.destroy()
+        self.player_frame.pack_forget()
+        self._set_tab_enabled('Now Playing', False)
 
         self.show_browse()
         self.status.config(text="Ready")
@@ -961,20 +981,52 @@ class YouTubeStreamApp:
         ).pack(pady=15, padx=30)
         dlg.bind('<Return>', lambda e: do_add())
 
-    def show_browse(self) -> None:
-        """Show browse tab with video grid"""
-        self.active_tab = "Browse"
+    def _highlight_tab(self, active: str) -> None:
+        """Mark one tab as the active one (accent background)."""
         for name, btn in self.tabs.items():
-            if name == "Browse":
-                btn.config(
-                    bg=ACCENT, fg=WHITE, font=('Segoe UI', 10, 'bold')
-                )
+            if name == active:
+                btn.config(bg=ACCENT, fg=WHITE,
+                           font=('Segoe UI', 10, 'bold'))
             else:
                 btn.config(bg=ELEVATED, fg=WHITE, font=('Segoe UI', 10))
 
+    def _set_tab_enabled(self, name: str, enabled: bool) -> None:
+        """Enable/disable a tab button (Now Playing is empty until playback)."""
+        btn = self.tabs.get(name)
+        if not btn:
+            return
+        btn.config(state='normal' if enabled else 'disabled')
+        if not enabled:
+            btn.config(fg=MUTED)
+
+    def show_now_playing(self) -> None:
+        """Show the persistent player tab."""
+        self.active_tab = "Now Playing"
+        self._highlight_tab('Now Playing')
+
         for w in self.content_frame.winfo_children():
-            if w is not self.grid:
+            if w is not self.grid and w is not self.player_frame:
                 w.destroy()
+
+        if not self.current_video:
+            tk.Label(
+                self.player_frame, text="Nothing playing",
+                font=HEADING_FONT, bg=CANVAS, fg=MUTED
+            ).pack(expand=True)
+            self.player_frame.pack(fill='both', expand=True)
+            return
+
+        self.player_frame.pack(fill='both', expand=True)
+
+    def show_browse(self) -> None:
+        """Show browse tab with video grid"""
+        self.active_tab = "Browse"
+        self._highlight_tab('Browse')
+
+        for w in self.content_frame.winfo_children():
+            if w is not self.grid and w is not self.player_frame:
+                w.destroy()
+        self.player_frame.pack_forget()
 
         self.grid.pack(fill='both', expand=True)
         if not self.current_videos:
@@ -990,15 +1042,12 @@ class YouTubeStreamApp:
     def show_history(self) -> None:
         """Show watch history tab"""
         self.active_tab = "History"
-        for name, btn in self.tabs.items():
-            btn.config(bg=ELEVATED, fg=WHITE, font=('Segoe UI', 10))
-        self.tabs["History"].config(
-            bg=ACCENT, fg=WHITE, font=('Segoe UI', 10, 'bold')
-        )
+        self._highlight_tab('History')
 
         for w in self.content_frame.winfo_children():
-            if w is not self.grid:
+            if w is not self.grid and w is not self.player_frame:
                 w.destroy()
+        self.player_frame.pack_forget()
 
         if not self.auth.current_user:
             tk.Label(
@@ -1065,15 +1114,12 @@ class YouTubeStreamApp:
     def show_playlists(self) -> None:
         """Show playlists tab"""
         self.active_tab = "Playlists"
-        for name, btn in self.tabs.items():
-            btn.config(bg=ELEVATED, fg=WHITE, font=('Segoe UI', 10))
-        self.tabs["Playlists"].config(
-            bg=ACCENT, fg=WHITE, font=('Segoe UI', 10, 'bold')
-        )
+        self._highlight_tab('Playlists')
 
         for w in self.content_frame.winfo_children():
-            if w is not self.grid:
+            if w is not self.grid and w is not self.player_frame:
                 w.destroy()
+        self.player_frame.pack_forget()
 
         if not self.auth.current_user:
             tk.Label(
@@ -1493,9 +1539,11 @@ class YouTubeStreamApp:
         self.status.config(text=f"Playing: {title[:40]}...")
 
         for w in self.content_frame.winfo_children():
-            if w is not self.grid:
+            if w is not self.grid and w is not self.player_frame:
                 w.destroy()
 
+        self._set_tab_enabled('Now Playing', True)
+        self.show_now_playing()
         self._init_player_ui(video)
 
         self.root.after(50, lambda: self.init_mpv(video))
